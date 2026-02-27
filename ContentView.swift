@@ -9,14 +9,12 @@ import SwiftUI
 
 struct ContentView: View {
     var body: some View {
-        VStack {
-            Text("Moovie")
-            LazyVStack{
-                Text("Movies here")
-            
-            }.border(.black)
+        TabView {
+            NavigationStack { MyRankingView() }
+                .tabItem { Label("Rankings", systemImage: "person.crop.square") }
+            NavigationStack { AddMovieView() }
+                .tabItem { Label("Add", systemImage: "plus") }
         }
-        .padding()
     }
 }
 
