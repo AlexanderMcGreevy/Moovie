@@ -14,6 +14,8 @@ struct ContentView: View {
                 .tabItem { Label("Rankings", systemImage: "person.crop.square") }
             NavigationStack { AddMovieView() }
                 .tabItem { Label("Add", systemImage: "plus") }
+            NavigationStack { TopMoviesView() }
+                .tabItem { Label("Top Charts", systemImage: "star") }
         }
     }
 }
