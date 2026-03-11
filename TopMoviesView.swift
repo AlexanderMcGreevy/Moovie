@@ -15,17 +15,29 @@ struct TopMoviesView: View {
                 if isLoading {
                     ProgressView("Loading movies...")
                 } else if let errorMessage = errorMessage {
-                    VStack {
+                    VStack(spacing: 12) {
                         Text("Could not load movies")
+                            .font(.headline)
                         Text(errorMessage)
                             .font(.caption)
                             .foregroundColor(.red)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+
+                        Button("Retry") {
+                            Task {
+                                await loadMovies()
+                            }
+                        }
+                        .buttonStyle(.bordered)
                     }
+                    .padding()
                 } else {
                     List(movies) { movie in
                         VStack(alignment: .leading, spacing: 6) {
                             Text(movie.title)
                                 .font(.headline)
+                            Image(movie.posterImageName)
 
                             Text("Release Date: \(movie.releaseDate)")
                                 .font(.subheadline)
@@ -59,7 +71,7 @@ struct TopMoviesView: View {
         errorMessage = nil
 
         do {
-            movies = try await MovieInfo.fetchTopMovies()
+            movies = try await MovieInfo.fetchPopularMovies()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -71,22 +83,6 @@ struct TopMoviesView: View {
 #Preview {
     TopMoviesView(
         previewMovies: [
-            MovieInfo(
-                id: 1,
-                title: "Inception",
-                releaseDate: "2010-07-16",
-                ranking: 8.8,
-                description: "A thief enters people’s dreams to steal information.",
-                notes: nil
-            ),
-            MovieInfo(
-                id: 2,
-                title: "Interstellar",
-                releaseDate: "2014-11-07",
-                ranking: 8.6,
-                description: "A team travels through a wormhole in space to try to save humanity.",
-                notes: nil
-            )
-        ]
+            ]
     )
 }
