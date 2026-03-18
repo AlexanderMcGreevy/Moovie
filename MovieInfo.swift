@@ -39,15 +39,17 @@ struct MovieInfo: Codable, Identifiable {
     var ranking: Double
     var description: String?
     var notes: String?
+    var poster_path: String?
     //later add actors, image, specific rankings
     
-    init(id: Int = 0, title: String = "", releaseDate: String = "", ranking: Double = 0.0, description: String? = nil, notes: String? = nil){
+    init(id: Int = 0, title: String = "", releaseDate: String = "", ranking: Double = 0.0, description: String? = nil, notes: String? = nil, poster_path: String? = nil){
         self.id = id
         self.title = title
         self.releaseDate = releaseDate
         self.ranking = ranking
         self.description = description
         self.notes = notes
+        self.poster_path = poster_path
     }
 }
 
@@ -101,7 +103,8 @@ extension MovieInfo {
                     releaseDate: $0.displayDate,
                     ranking: $0.voteAverage,
                     description: $0.overview,
-                    notes: nil
+                    notes: nil,
+                    poster_path: $0.poster_path
                 )
             }
         } catch let error as DecodingError {
@@ -145,6 +148,7 @@ private struct TMDBMovie: Codable {
     let releaseDate: String?     // for movies
     let firstAirDate: String?    // for TV shows
     let voteAverage: Double
+    let poster_path: String?
 
     // Computed properties to normalize the data
     var displayTitle: String {
@@ -163,5 +167,6 @@ private struct TMDBMovie: Codable {
         case releaseDate = "release_date"
         case firstAirDate = "first_air_date"
         case voteAverage = "vote_average"
+        case poster_path
     }
 }

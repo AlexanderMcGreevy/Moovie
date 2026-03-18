@@ -1,4 +1,5 @@
 import SwiftUI
+import Kingfisher
 
 struct TopMoviesView: View {
     @State private var movies: [MovieInfo]
@@ -34,10 +35,18 @@ struct TopMoviesView: View {
                     .padding()
                 } else {
                     List(movies) { movie in
-                        VStack(alignment: .leading, spacing: 6) {
+                        LazyVStack(alignment: .center, spacing: 4) {
+                            if let poster_path = movie.poster_path, !poster_path.isEmpty {
+                                let imageURL = "https://image.tmdb.org/t/p/w500\(poster_path)"
+                                KFImage(URL(string: imageURL))
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fit)
+                                    .frame(maxHeight: 250)
+                                    .cornerRadius(8)
+                            }
                             Text(movie.title)
                                 .font(.headline)
-                            Image(movie.posterImageName)
+                            
 
                             Text("Release Date: \(movie.releaseDate)")
                                 .font(.subheadline)
