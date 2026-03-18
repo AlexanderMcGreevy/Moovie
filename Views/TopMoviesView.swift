@@ -35,35 +35,31 @@ struct TopMoviesView: View {
                     .padding()
                 } else {
                     List(movies) { movie in
-                        LazyVStack(alignment: .center, spacing: 4) {
-                            if let poster_path = movie.poster_path, !poster_path.isEmpty {
-                                let imageURL = "https://image.tmdb.org/t/p/w500\(poster_path)"
-                                KFImage(URL(string: imageURL))
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fit)
-                                    .frame(maxHeight: 250)
-                                    .cornerRadius(8)
+                        NavigationLink(destination: DetailedMovieView(movie: movie)) {
+                            LazyVStack(alignment: .center, spacing: 4) {
+                                if let poster_path = movie.poster_path, !poster_path.isEmpty {
+                                    let imageURL = "https://image.tmdb.org/t/p/w500\(poster_path)"
+                                    KFImage(URL(string: imageURL))
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fit)
+                                        .frame(maxHeight: 250)
+                                        .cornerRadius(8)
+                                }
+                                Text(movie.title)
+                                    .font(.headline)
+                                
+                                
+                                Text("Release Date: \(movie.releaseDate)")
+                                    .font(.subheadline)
+                                    .foregroundColor(.gray)
+                                
+                                Text("Rating: \(movie.ranking, specifier: "%.1f")")
+                                    .font(.subheadline)
+                                
+                                
                             }
-                            Text(movie.title)
-                                .font(.headline)
-                            
-
-                            Text("Release Date: \(movie.releaseDate)")
-                                .font(.subheadline)
-                                .foregroundColor(.gray)
-
-                            Text("Rating: \(movie.ranking, specifier: "%.1f")")
-                                .font(.subheadline)
-
-                            if let description = movie.description, !description.isEmpty {
-                                Text(description)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(3)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
+                            .padding(.vertical, 4)
+                        }}
                 }
             }
             .navigationTitle("Top Movies")
