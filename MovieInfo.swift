@@ -40,9 +40,19 @@ struct MovieInfo: Codable, Identifiable {
     var description: String?
     var notes: String?
     var poster_path: String?
+
+    // Additional API fields
+    var adult: Bool?
+    var backdropPath: String?
+    var genreIds: [Int]?
+    var originalLanguage: String?
+    var originalTitle: String?
+    var popularity: Double?
+    var video: Bool?
+    var voteCount: Int?
     //later add actors, image, specific rankings
-    
-    init(id: Int = 0, title: String = "", releaseDate: String = "", ranking: Double = 0.0, description: String? = nil, notes: String? = nil, poster_path: String? = nil){
+
+    init(id: Int = 0, title: String = "", releaseDate: String = "", ranking: Double = 0.0, description: String? = nil, notes: String? = nil, poster_path: String? = nil, adult: Bool? = nil, backdropPath: String? = nil, genreIds: [Int]? = nil, originalLanguage: String? = nil, originalTitle: String? = nil, popularity: Double? = nil, video: Bool? = nil, voteCount: Int? = nil){
         self.id = id
         self.title = title
         self.releaseDate = releaseDate
@@ -50,6 +60,32 @@ struct MovieInfo: Codable, Identifiable {
         self.description = description
         self.notes = notes
         self.poster_path = poster_path
+        self.adult = adult
+        self.backdropPath = backdropPath
+        self.genreIds = genreIds
+        self.originalLanguage = originalLanguage
+        self.originalTitle = originalTitle
+        self.popularity = popularity
+        self.video = video
+        self.voteCount = voteCount
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case releaseDate
+        case ranking
+        case description
+        case notes
+        case poster_path
+        case adult
+        case backdropPath
+        case genreIds
+        case originalLanguage
+        case originalTitle
+        case popularity
+        case video
+        case voteCount
     }
 }
 
@@ -104,7 +140,15 @@ extension MovieInfo {
                     ranking: $0.voteAverage,
                     description: $0.overview,
                     notes: nil,
-                    poster_path: $0.poster_path
+                    poster_path: $0.posterPath,
+                    adult: $0.adult,
+                    backdropPath: $0.backdropPath,
+                    genreIds: $0.genreIds,
+                    originalLanguage: $0.originalLanguage,
+                    originalTitle: $0.originalTitle,
+                    popularity: $0.popularity,
+                    video: $0.video,
+                    voteCount: $0.voteCount
                 )
             }
         } catch let error as DecodingError {
@@ -137,18 +181,36 @@ extension MovieInfo {
 }
 
 private struct TMDBPopularResponse: Codable {
+    let page: Int
     let results: [TMDBMovie]
+    let totalPages: Int
+    let totalResults: Int
+
+    enum CodingKeys: String, CodingKey {
+        case page
+        case results
+        case totalPages = "total_pages"
+        case totalResults = "total_results"
+    }
 }
 
 private struct TMDBMovie: Codable {
+    let adult: Bool
+    let backdropPath: String?
+    let genreIds: [Int]
     let id: Int
-    let title: String?           // for movies
-    let name: String?            // for TV shows
+    let originalLanguage: String
+    let originalTitle: String?      // for movies
+    let title: String?               // for movies
+    let name: String?                // for TV shows
     let overview: String?
-    let releaseDate: String?     // for movies
-    let firstAirDate: String?    // for TV shows
+    let popularity: Double
+    let posterPath: String?
+    let releaseDate: String?         // for movies
+    let firstAirDate: String?        // for TV shows
+    let video: Bool?                 // only for movies
     let voteAverage: Double
-    let poster_path: String?
+    let voteCount: Int
 
     // Computed properties to normalize the data
     var displayTitle: String {
@@ -160,13 +222,21 @@ private struct TMDBMovie: Codable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case adult
+        case backdropPath = "backdrop_path"
+        case genreIds = "genre_ids"
         case id
+        case originalLanguage = "original_language"
+        case originalTitle = "original_title"
         case title
         case name
         case overview
+        case popularity
+        case posterPath = "poster_path"
         case releaseDate = "release_date"
         case firstAirDate = "first_air_date"
+        case video
         case voteAverage = "vote_average"
-        case poster_path
+        case voteCount = "vote_count"
     }
 }
