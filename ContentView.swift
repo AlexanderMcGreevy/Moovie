@@ -15,7 +15,7 @@ struct ContentView: View {
             NavigationStack { AddMovieView() }
                 .tabItem { Label("Add", systemImage: "plus") }
             NavigationStack { TopMoviesView() }
-                .tabItem { Label("Top Charts", systemImage: "star") }
+                .tabItem { Label("Movies", systemImage: "star") }
         }
     }
 }

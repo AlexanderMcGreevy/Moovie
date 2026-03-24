@@ -32,6 +32,101 @@ enum MediaCategory: String {
     case airingToday = "airing_today"   // TV specific
 }
 
+// MARK: - Discover API Query Builder
+struct DiscoverQuery {
+    var sortBy: String?
+    var withGenres: [Int]?
+    var primaryReleaseDateGTE: String?
+    var primaryReleaseDateLTE: String?
+    var voteCountGTE: Int?
+    var voteAverageGTE: Double?
+    var page: Int = 1
+
+    func toQueryItems() -> [URLQueryItem] {
+        var items: [URLQueryItem] = [
+            URLQueryItem(name: "language", value: "en-US"),
+            URLQueryItem(name: "page", value: "\(page)")
+        ]
+
+        if let sortBy = sortBy {
+            items.append(URLQueryItem(name: "sort_by", value: sortBy))
+        }
+
+        if let withGenres = withGenres, !withGenres.isEmpty {
+            let genreString = withGenres.map(String.init).joined(separator: ",")
+            items.append(URLQueryItem(name: "with_genres", value: genreString))
+        }
+
+        if let primaryReleaseDateGTE = primaryReleaseDateGTE {
+            items.append(URLQueryItem(name: "primary_release_date.gte", value: primaryReleaseDateGTE))
+        }
+
+        if let primaryReleaseDateLTE = primaryReleaseDateLTE {
+            items.append(URLQueryItem(name: "primary_release_date.lte", value: primaryReleaseDateLTE))
+        }
+
+        if let voteCountGTE = voteCountGTE {
+            items.append(URLQueryItem(name: "vote_count.gte", value: "\(voteCountGTE)"))
+        }
+
+        if let voteAverageGTE = voteAverageGTE {
+            items.append(URLQueryItem(name: "vote_average.gte", value: "\(voteAverageGTE)"))
+        }
+
+        return items
+    }
+}
+
+// MARK: - Movie Display Modes
+enum MovieMode: String, CaseIterable, Identifiable {
+    case popular = "Popular"
+    case topRated = "Top Rated"
+    case upcoming = "Upcoming"
+    case nowPlaying = "Now Playing"
+
+    var id: String { rawValue }
+
+    func toDiscoverQuery() -> DiscoverQuery {
+        let calendar = Calendar.current
+        let today = Date()
+
+        switch self {
+        case .popular:
+            return DiscoverQuery(sortBy: "popularity.desc")
+
+        case .topRated:
+            return DiscoverQuery(
+                sortBy: "vote_average.desc",
+                voteCountGTE: 1000  // Avoid obscure movies with few votes
+            )
+
+        case .upcoming:
+            // Movies releasing in the next 6 months
+            let sixMonthsFromNow = calendar.date(byAdding: .month, value: 6, to: today)!
+            return DiscoverQuery(
+                sortBy: "popularity.desc",
+                primaryReleaseDateGTE: formatDateForAPI(today),
+                primaryReleaseDateLTE: formatDateForAPI(sixMonthsFromNow)
+            )
+
+        case .nowPlaying:
+            // Movies released in the last 45 days
+            let fortyFiveDaysAgo = calendar.date(byAdding: .day, value: -45, to: today)!
+            return DiscoverQuery(
+                sortBy: "popularity.desc",
+                primaryReleaseDateGTE: formatDateForAPI(fortyFiveDaysAgo),
+                primaryReleaseDateLTE: formatDateForAPI(today)
+            )
+        }
+    }
+
+    private func formatDateForAPI(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+}
+
 struct MovieInfo: Codable, Identifiable {
     var id: Int
     var title: String
@@ -177,6 +272,86 @@ extension MovieInfo {
 
     static func fetchNowPlayingMovies(page: Int = 1) async throws -> [MovieInfo] {
         try await fetchMedia(type: .movie, category: .nowPlaying, page: page)
+    }
+
+    // MARK: - Unified Discover API Method
+    static func fetchMoviesWithDiscover(query: DiscoverQuery) async throws -> [MovieInfo] {
+        guard let token = Secrets.tmdbToken else {
+            print("❌ TMDB Token is not configured. Please set TMDB_READ_TOKEN in your build configuration.")
+            throw NSError(domain: "MovieInfo", code: 1001, userInfo: [
+                NSLocalizedDescriptionKey: "TMDB API token is not configured. Please check your environment variables."
+            ])
+        }
+
+        var components = URLComponents(string: "https://api.themoviedb.org/3/discover/movie")!
+        components.queryItems = query.toQueryItems()
+
+        guard let url = components.url else {
+            throw URLError(.badURL)
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 10
+        request.allHTTPHeaderFields = [
+            "accept": "application/json",
+            "Authorization": "Bearer \(token)"
+        ]
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw URLError(.badServerResponse)
+            }
+
+            guard 200...299 ~= httpResponse.statusCode else {
+                print("❌ HTTP Error: \(httpResponse.statusCode)")
+                if let responseString = String(data: data, encoding: .utf8) {
+                    print("Response: \(responseString)")
+                }
+                throw NSError(domain: "MovieInfo", code: httpResponse.statusCode, userInfo: [
+                    NSLocalizedDescriptionKey: "Server returned error code: \(httpResponse.statusCode)"
+                ])
+            }
+
+            let decoded = try JSONDecoder().decode(TMDBPopularResponse.self, from: data)
+
+            return decoded.results.map {
+                MovieInfo(
+                    id: $0.id,
+                    title: $0.displayTitle,
+                    releaseDate: $0.displayDate,
+                    ranking: $0.voteAverage,
+                    description: $0.overview,
+                    notes: nil,
+                    poster_path: $0.posterPath,
+                    adult: $0.adult,
+                    backdropPath: $0.backdropPath,
+                    genreIds: $0.genreIds,
+                    originalLanguage: $0.originalLanguage,
+                    originalTitle: $0.originalTitle,
+                    popularity: $0.popularity,
+                    video: $0.video,
+                    voteCount: $0.voteCount
+                )
+            }
+        } catch let error as DecodingError {
+            print("❌ Decoding error: \(error)")
+            throw NSError(domain: "MovieInfo", code: 1002, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to decode response from TMDB API"
+            ])
+        } catch {
+            print("❌ Network error: \(error)")
+            throw error
+        }
+    }
+
+    // Convenience method for fetching by mode
+    static func fetchMovies(mode: MovieMode, page: Int = 1) async throws -> [MovieInfo] {
+        var query = mode.toDiscoverQuery()
+        query.page = page
+        return try await fetchMoviesWithDiscover(query: query)
     }
 }
 
