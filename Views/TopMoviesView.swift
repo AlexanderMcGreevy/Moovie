@@ -7,20 +7,13 @@ struct TopMoviesView: View {
     @State private var errorMessage: String?
     @State private var selectedMode: MovieMode = .popular
     @State private var searchQuery: String = ""
+    @State private var searchTask: Task<Void, Never>?
+    @State private var debouncedSearchQuery: String = ""
+    @State private var selectedGenres: Set<MovieGenre> = []
+    @State private var isGenrePickerExpanded: Bool = false
 
     init(previewMovies: [MovieInfo] = []) {
         _movies = State(initialValue: previewMovies)
-    }
-
-    // Computed property to filter movies based on search query
-    private var filteredMovies: [MovieInfo] {
-        if searchQuery.isEmpty {
-            return movies
-        } else {
-            return movies.filter { movie in
-                movie.title.localizedCaseInsensitiveContains(searchQuery)
-            }
-        }
     }
 
     var body: some View {
@@ -35,6 +28,50 @@ struct TopMoviesView: View {
                 .pickerStyle(.segmented)
                 .padding(.horizontal)
                 .padding(.vertical, 8)
+
+                // Genre Picker - Expandable Section
+                VStack(spacing: 0) {
+                    Button(action: {
+                        withAnimation {
+                            isGenrePickerExpanded.toggle()
+                        }
+                    }) {
+                        HStack {
+                            Text(genrePickerLabel)
+                                .foregroundColor(.primary)
+                                .font(.subheadline)
+                            Spacer()
+                            Image(systemName: isGenrePickerExpanded ? "chevron.up" : "chevron.down")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Color(.systemGray6))
+                    }
+
+                    if isGenrePickerExpanded {
+                        FlowLayout(spacing: 8) {
+                            ForEach(MovieGenre.allCases.filter { $0 != .all }) { genre in
+                                Button(action: {
+                                    toggleGenre(genre)
+                                }) {
+                                    Text(genre.displayName)
+                                        .font(.subheadline)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(selectedGenres.contains(genre) ? Color.blue : Color(.systemGray5))
+                                        .foregroundColor(selectedGenres.contains(genre) ? .white : .primary)
+                                        .cornerRadius(16)
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(Color(.systemGray6))
+                        .transition(.opacity)
+                    }
+                }
 
                 // Content
                 Group {
@@ -59,7 +96,7 @@ struct TopMoviesView: View {
                         }
                         .padding()
                     } else {
-                        List(filteredMovies) { movie in
+                        List(movies) { movie in
                             NavigationLink(destination: DetailedMovieView(movie: movie)) {
                                 LazyVStack(alignment: .center, spacing: 4) {
                                     if let poster_path = movie.poster_path, !poster_path.isEmpty {
@@ -90,7 +127,6 @@ struct TopMoviesView: View {
                     }
                 }
             }
-            .navigationTitle("Movies")
             .task {
                 if movies.isEmpty {
                     await loadMovies()
@@ -101,6 +137,37 @@ struct TopMoviesView: View {
                     await loadMovies()
                 }
             }
+            .onChange(of: selectedGenres) { oldValue, newValue in
+                Task {
+                    await loadMovies()
+                }
+            }
+            .onChange(of: searchQuery) { oldValue, newValue in
+                // Cancel previous search task
+                searchTask?.cancel()
+
+                // Create new debounced search task
+                searchTask = Task {
+                    // Wait for 0.8 seconds
+                    try? await Task.sleep(nanoseconds: 800_000_000)
+
+                    // Check if task was cancelled
+                    guard !Task.isCancelled else { return }
+
+                    // Update debounced query which will trigger loadMovies
+                    debouncedSearchQuery = newValue
+                }
+            }
+            .onChange(of: debouncedSearchQuery) { oldValue, newValue in
+                Task {
+                    await loadMovies()
+                }
+            }
+            .onSubmit(of: .search) {
+                // When user presses enter, immediately search
+                searchTask?.cancel()
+                debouncedSearchQuery = searchQuery
+            }
         }
     }
 
@@ -109,12 +176,88 @@ struct TopMoviesView: View {
         errorMessage = nil
 
         do {
-            movies = try await MovieInfo.fetchMovies(mode: selectedMode)
+            // Use search API if there's a search query, otherwise use discover API with genre filter
+            if debouncedSearchQuery.isEmpty {
+                movies = try await MovieInfo.fetchMovies(mode: selectedMode, genres: selectedGenres)
+            } else {
+                movies = try await MovieInfo.searchMovies(query: debouncedSearchQuery)
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
 
         isLoading = false
+    }
+
+    private var genrePickerLabel: String {
+        if selectedGenres.isEmpty {
+            return "Filter by Genre"
+        } else if selectedGenres.count == 1 {
+            return "Genre: \(selectedGenres.first!.displayName)"
+        } else {
+            return "Genres: \(selectedGenres.count) selected"
+        }
+    }
+
+    private func toggleGenre(_ genre: MovieGenre) {
+        if selectedGenres.contains(genre) {
+            selectedGenres.remove(genre)
+        } else {
+            selectedGenres.insert(genre)
+        }
+    }
+}
+
+// MARK: - FlowLayout for wrapping genre chips
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let result = FlowResult(
+            in: proposal.replacingUnspecifiedDimensions().width,
+            subviews: subviews,
+            spacing: spacing
+        )
+        return result.size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = FlowResult(
+            in: bounds.width,
+            subviews: subviews,
+            spacing: spacing
+        )
+        for (index, subview) in subviews.enumerated() {
+            subview.place(at: CGPoint(x: bounds.minX + result.positions[index].x, y: bounds.minY + result.positions[index].y), proposal: .unspecified)
+        }
+    }
+
+    struct FlowResult {
+        var size: CGSize = .zero
+        var positions: [CGPoint] = []
+
+        init(in maxWidth: CGFloat, subviews: Subviews, spacing: CGFloat) {
+            var currentX: CGFloat = 0
+            var currentY: CGFloat = 0
+            var lineHeight: CGFloat = 0
+
+            for subview in subviews {
+                let size = subview.sizeThatFits(.unspecified)
+
+                if currentX + size.width > maxWidth && currentX > 0 {
+                    // Move to next line
+                    currentX = 0
+                    currentY += lineHeight + spacing
+                    lineHeight = 0
+                }
+
+                positions.append(CGPoint(x: currentX, y: currentY))
+                lineHeight = max(lineHeight, size.height)
+                currentX += size.width + spacing
+            }
+
+            self.size = CGSize(width: maxWidth, height: currentY + lineHeight)
+        }
     }
 }
 

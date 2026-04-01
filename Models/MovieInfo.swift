@@ -32,6 +32,57 @@ enum MediaCategory: String {
     case airingToday = "airing_today"   // TV specific
 }
 
+// MARK: - Movie Genres
+enum MovieGenre: Int, CaseIterable, Identifiable {
+    case all = 0
+    case action = 28
+    case adventure = 12
+    case animation = 16
+    case comedy = 35
+    case crime = 80
+    case documentary = 99
+    case drama = 18
+    case family = 10751
+    case fantasy = 14
+    case history = 36
+    case horror = 27
+    case music = 10402
+    case mystery = 9648
+    case romance = 10749
+    case scienceFiction = 878
+    case tvMovie = 10770
+    case thriller = 53
+    case war = 10752
+    case western = 37
+
+    var id: Int { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .all: return "All Genres"
+        case .action: return "Action"
+        case .adventure: return "Adventure"
+        case .animation: return "Animation"
+        case .comedy: return "Comedy"
+        case .crime: return "Crime"
+        case .documentary: return "Documentary"
+        case .drama: return "Drama"
+        case .family: return "Family"
+        case .fantasy: return "Fantasy"
+        case .history: return "History"
+        case .horror: return "Horror"
+        case .music: return "Music"
+        case .mystery: return "Mystery"
+        case .romance: return "Romance"
+        case .scienceFiction: return "Sci-Fi"
+        case .tvMovie: return "TV Movie"
+        case .thriller: return "Thriller"
+        case .war: return "War"
+        case .western: return "Western"
+        }
+    }
+}
+
 // MARK: - Discover API Query Builder
 struct DiscoverQuery {
     var sortBy: String?
@@ -86,17 +137,25 @@ enum MovieMode: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    func toDiscoverQuery() -> DiscoverQuery {
+    func toDiscoverQuery(genres: Set<MovieGenre> = []) -> DiscoverQuery {
         let calendar = Calendar.current
         let today = Date()
 
+        // Extract genre IDs, filtering out "All Genres"
+        var genreIds: [Int]? = nil
+        let filteredGenres = genres.filter { $0 != .all }
+        if !filteredGenres.isEmpty {
+            genreIds = filteredGenres.map { $0.rawValue }
+        }
+
         switch self {
         case .popular:
-            return DiscoverQuery(sortBy: "popularity.desc")
+            return DiscoverQuery(sortBy: "popularity.desc", withGenres: genreIds)
 
         case .topRated:
             return DiscoverQuery(
                 sortBy: "vote_average.desc",
+                withGenres: genreIds,
                 voteCountGTE: 1000  // Avoid obscure movies with few votes
             )
 
@@ -105,6 +164,7 @@ enum MovieMode: String, CaseIterable, Identifiable {
             let sixMonthsFromNow = calendar.date(byAdding: .month, value: 6, to: today)!
             return DiscoverQuery(
                 sortBy: "popularity.desc",
+                withGenres: genreIds,
                 primaryReleaseDateGTE: formatDateForAPI(today),
                 primaryReleaseDateLTE: formatDateForAPI(sixMonthsFromNow)
             )
@@ -114,6 +174,7 @@ enum MovieMode: String, CaseIterable, Identifiable {
             let fortyFiveDaysAgo = calendar.date(byAdding: .day, value: -45, to: today)!
             return DiscoverQuery(
                 sortBy: "popularity.desc",
+                withGenres: genreIds,
                 primaryReleaseDateGTE: formatDateForAPI(fortyFiveDaysAgo),
                 primaryReleaseDateLTE: formatDateForAPI(today)
             )
@@ -348,10 +409,94 @@ extension MovieInfo {
     }
 
     // Convenience method for fetching by mode
-    static func fetchMovies(mode: MovieMode, page: Int = 1) async throws -> [MovieInfo] {
-        var query = mode.toDiscoverQuery()
+    static func fetchMovies(mode: MovieMode, genres: Set<MovieGenre> = [], page: Int = 1) async throws -> [MovieInfo] {
+        var query = mode.toDiscoverQuery(genres: genres)
         query.page = page
         return try await fetchMoviesWithDiscover(query: query)
+    }
+
+    // MARK: - Search API Method
+    static func searchMovies(query: String, page: Int = 1) async throws -> [MovieInfo] {
+        guard let token = Secrets.tmdbToken else {
+            print("❌ TMDB Token is not configured. Please set TMDB_READ_TOKEN in your build configuration.")
+            throw NSError(domain: "MovieInfo", code: 1001, userInfo: [
+                NSLocalizedDescriptionKey: "TMDB API token is not configured. Please check your environment variables."
+            ])
+        }
+
+        guard !query.isEmpty else {
+            throw NSError(domain: "MovieInfo", code: 1003, userInfo: [
+                NSLocalizedDescriptionKey: "Search query cannot be empty"
+            ])
+        }
+
+        var components = URLComponents(string: "https://api.themoviedb.org/3/search/movie")!
+        components.queryItems = [
+            URLQueryItem(name: "query", value: query),
+            URLQueryItem(name: "language", value: "en-US"),
+            URLQueryItem(name: "page", value: "\(page)"),
+            URLQueryItem(name: "include_adult", value: "false")
+        ]
+
+        guard let url = components.url else {
+            throw URLError(.badURL)
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 10
+        request.allHTTPHeaderFields = [
+            "accept": "application/json",
+            "Authorization": "Bearer \(token)"
+        ]
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw URLError(.badServerResponse)
+            }
+
+            guard 200...299 ~= httpResponse.statusCode else {
+                print("❌ HTTP Error: \(httpResponse.statusCode)")
+                if let responseString = String(data: data, encoding: .utf8) {
+                    print("Response: \(responseString)")
+                }
+                throw NSError(domain: "MovieInfo", code: httpResponse.statusCode, userInfo: [
+                    NSLocalizedDescriptionKey: "Server returned error code: \(httpResponse.statusCode)"
+                ])
+            }
+
+            let decoded = try JSONDecoder().decode(TMDBPopularResponse.self, from: data)
+
+            return decoded.results.map {
+                MovieInfo(
+                    id: $0.id,
+                    title: $0.displayTitle,
+                    releaseDate: $0.displayDate,
+                    ranking: $0.voteAverage,
+                    description: $0.overview,
+                    notes: nil,
+                    poster_path: $0.posterPath,
+                    adult: $0.adult,
+                    backdropPath: $0.backdropPath,
+                    genreIds: $0.genreIds,
+                    originalLanguage: $0.originalLanguage,
+                    originalTitle: $0.originalTitle,
+                    popularity: $0.popularity,
+                    video: $0.video,
+                    voteCount: $0.voteCount
+                )
+            }
+        } catch let error as DecodingError {
+            print("❌ Decoding error: \(error)")
+            throw NSError(domain: "MovieInfo", code: 1002, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to decode response from TMDB API"
+            ])
+        } catch {
+            print("❌ Network error: \(error)")
+            throw error
+        }
     }
 }
 
@@ -413,5 +558,281 @@ private struct TMDBMovie: Codable {
         case video
         case voteAverage = "vote_average"
         case voteCount = "vote_count"
+    }
+}
+
+// MARK: - Movie Details Response (for /movie/{id} endpoint)
+private struct TMDBMovieDetails: Codable {
+    let adult: Bool
+    let backdropPath: String?
+    let genres: [Genre]
+    let id: Int
+    let originalLanguage: String
+    let originalTitle: String
+    let title: String
+    let overview: String?
+    let popularity: Double
+    let posterPath: String?
+    let releaseDate: String
+    let video: Bool
+    let voteAverage: Double
+    let voteCount: Int
+    let tagline: String?
+    let runtime: Int?
+
+    struct Genre: Codable {
+        let id: Int
+        let name: String
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case adult
+        case backdropPath = "backdrop_path"
+        case genres
+        case id
+        case originalLanguage = "original_language"
+        case originalTitle = "original_title"
+        case title
+        case overview
+        case popularity
+        case posterPath = "poster_path"
+        case releaseDate = "release_date"
+        case video
+        case voteAverage = "vote_average"
+        case voteCount = "vote_count"
+        case tagline
+        case runtime
+    }
+}
+
+// MARK: - Cast & Crew Models
+struct CastMember: Codable, Identifiable {
+    let id: Int
+    let name: String
+    let character: String
+    let profilePath: String?
+    let order: Int
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case character
+        case profilePath = "profile_path"
+        case order
+    }
+}
+
+private struct MovieCreditsResponse: Codable {
+    let id: Int
+    let cast: [CastMember]
+}
+
+// MARK: - Person Models
+struct PersonDetails: Codable, Identifiable {
+    let id: Int
+    let name: String
+    let biography: String?
+    let birthday: String?
+    let deathday: String?
+    let placeOfBirth: String?
+    let profilePath: String?
+    let knownForDepartment: String?
+    let popularity: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case biography
+        case birthday
+        case deathday
+        case placeOfBirth = "place_of_birth"
+        case profilePath = "profile_path"
+        case knownForDepartment = "known_for_department"
+        case popularity
+    }
+}
+
+struct PersonMovieCredit: Codable, Identifiable {
+    let id: Int
+    let title: String
+    let character: String?
+    let releaseDate: String?
+    let posterPath: String?
+    let voteAverage: Double
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case character
+        case releaseDate = "release_date"
+        case posterPath = "poster_path"
+        case voteAverage = "vote_average"
+    }
+}
+
+private struct PersonMovieCreditsResponse: Codable {
+    let cast: [PersonMovieCredit]
+}
+
+// MARK: - Cast & Person API Methods
+extension MovieInfo {
+    static func fetchMovieDetails(movieId: Int) async throws -> MovieInfo {
+        guard let token = Secrets.tmdbToken else {
+            throw NSError(domain: "MovieInfo", code: 1001, userInfo: [
+                NSLocalizedDescriptionKey: "TMDB API token is not configured."
+            ])
+        }
+
+        let urlString = "https://api.themoviedb.org/3/movie/\(movieId)"
+        guard let url = URL(string: urlString) else {
+            throw URLError(.badURL)
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 10
+        request.allHTTPHeaderFields = [
+            "accept": "application/json",
+            "Authorization": "Bearer \(token)"
+        ]
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+
+        guard 200...299 ~= httpResponse.statusCode else {
+            throw NSError(domain: "MovieInfo", code: httpResponse.statusCode, userInfo: [
+                NSLocalizedDescriptionKey: "Server returned error code: \(httpResponse.statusCode)"
+            ])
+        }
+
+        let decoded = try JSONDecoder().decode(TMDBMovieDetails.self, from: data)
+
+        return MovieInfo(
+            id: decoded.id,
+            title: decoded.title,
+            releaseDate: decoded.releaseDate,
+            ranking: decoded.voteAverage,
+            description: decoded.overview,
+            notes: nil,
+            poster_path: decoded.posterPath,
+            adult: decoded.adult,
+            backdropPath: decoded.backdropPath,
+            genreIds: decoded.genres.map { $0.id },
+            originalLanguage: decoded.originalLanguage,
+            originalTitle: decoded.originalTitle,
+            popularity: decoded.popularity,
+            video: decoded.video,
+            voteCount: decoded.voteCount
+        )
+    }
+
+    static func fetchMovieCredits(movieId: Int) async throws -> [CastMember] {
+        guard let token = Secrets.tmdbToken else {
+            throw NSError(domain: "MovieInfo", code: 1001, userInfo: [
+                NSLocalizedDescriptionKey: "TMDB API token is not configured."
+            ])
+        }
+
+        let urlString = "https://api.themoviedb.org/3/movie/\(movieId)/credits"
+        guard let url = URL(string: urlString) else {
+            throw URLError(.badURL)
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 10
+        request.allHTTPHeaderFields = [
+            "accept": "application/json",
+            "Authorization": "Bearer \(token)"
+        ]
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+
+        guard 200...299 ~= httpResponse.statusCode else {
+            throw NSError(domain: "MovieInfo", code: httpResponse.statusCode, userInfo: [
+                NSLocalizedDescriptionKey: "Server returned error code: \(httpResponse.statusCode)"
+            ])
+        }
+
+        let decoded = try JSONDecoder().decode(MovieCreditsResponse.self, from: data)
+        return decoded.cast
+    }
+
+    static func fetchPersonDetails(personId: Int) async throws -> PersonDetails {
+        guard let token = Secrets.tmdbToken else {
+            throw NSError(domain: "MovieInfo", code: 1001, userInfo: [
+                NSLocalizedDescriptionKey: "TMDB API token is not configured."
+            ])
+        }
+
+        let urlString = "https://api.themoviedb.org/3/person/\(personId)"
+        guard let url = URL(string: urlString) else {
+            throw URLError(.badURL)
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 10
+        request.allHTTPHeaderFields = [
+            "accept": "application/json",
+            "Authorization": "Bearer \(token)"
+        ]
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+
+        guard 200...299 ~= httpResponse.statusCode else {
+            throw NSError(domain: "MovieInfo", code: httpResponse.statusCode, userInfo: [
+                NSLocalizedDescriptionKey: "Server returned error code: \(httpResponse.statusCode)"
+            ])
+        }
+
+        return try JSONDecoder().decode(PersonDetails.self, from: data)
+    }
+
+    static func fetchPersonMovieCredits(personId: Int) async throws -> [PersonMovieCredit] {
+        guard let token = Secrets.tmdbToken else {
+            throw NSError(domain: "MovieInfo", code: 1001, userInfo: [
+                NSLocalizedDescriptionKey: "TMDB API token is not configured."
+            ])
+        }
+
+        let urlString = "https://api.themoviedb.org/3/person/\(personId)/movie_credits"
+        guard let url = URL(string: urlString) else {
+            throw URLError(.badURL)
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 10
+        request.allHTTPHeaderFields = [
+            "accept": "application/json",
+            "Authorization": "Bearer \(token)"
+        ]
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+
+        guard 200...299 ~= httpResponse.statusCode else {
+            throw NSError(domain: "MovieInfo", code: httpResponse.statusCode, userInfo: [
+                NSLocalizedDescriptionKey: "Server returned error code: \(httpResponse.statusCode)"
+            ])
+        }
+
+        let decoded = try JSONDecoder().decode(PersonMovieCreditsResponse.self, from: data)
+        return decoded.cast
     }
 }
