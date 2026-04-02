@@ -188,7 +188,7 @@ enum MovieMode: String, CaseIterable, Identifiable {
     }
 }
 
-struct MovieInfo: Codable, Identifiable {
+struct MovieInfo: Codable, Identifiable, Hashable {
     var id: Int
     var title: String
     var releaseDate: String

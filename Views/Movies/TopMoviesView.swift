@@ -11,6 +11,7 @@ struct TopMoviesView: View {
     @State private var debouncedSearchQuery: String = ""
     @State private var selectedGenres: Set<MovieGenre> = []
     @State private var isGenrePickerExpanded: Bool = false
+    @State private var movieToRank: MovieInfo?
 
     init(previewMovies: [MovieInfo] = []) {
         _movies = State(initialValue: previewMovies)
@@ -122,6 +123,14 @@ struct TopMoviesView: View {
                                 }
                                 .padding(.vertical, 4)
                             }
+                            .swipeActions(edge: .trailing) {
+                                Button {
+                                    movieToRank = movie
+                                } label: {
+                                    Label("Rank", systemImage: "star.fill")
+                                }
+                                .tint(.yellow)
+                            }
                         }
                         .searchable(text: $searchQuery, prompt: "Search movies...")
                     }
@@ -167,6 +176,9 @@ struct TopMoviesView: View {
                 // When user presses enter, immediately search
                 searchTask?.cancel()
                 debouncedSearchQuery = searchQuery
+            }
+            .navigationDestination(item: $movieToRank) { movie in
+                RankingView(movie: movie)
             }
         }
     }

@@ -145,13 +145,13 @@ struct DetailedMovieView: View {
                         }
                     }
 
-                    // Genre IDs
+                    // Genres
                     if let genreIds = displayMovie.genreIds, !genreIds.isEmpty {
                         HStack(alignment: .top) {
-                            Text("Genre IDs:")
+                            Text("Genres:")
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
-                            Text(genreIds.map { String($0) }.joined(separator: ", "))
+                            Text(genreIds.compactMap { MovieGenre(rawValue: $0)?.displayName }.joined(separator: ", "))
                                 .font(.subheadline)
                                 .fontWeight(.medium)
                         }
