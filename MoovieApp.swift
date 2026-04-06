@@ -14,6 +14,12 @@ struct MoovieApp: App {
         WindowGroup {
             ContentView()
         }
-        .modelContainer(for: [UserMovieRanking.self, UserProfile.self])
+        .modelContainer(for: [
+            UserMovieRanking.self,
+            UserProfile.self,
+            Friend.self,
+            FriendRequest.self,
+            SharedRanking.self
+        ])
     }
 }

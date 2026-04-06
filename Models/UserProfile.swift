@@ -18,12 +18,20 @@ class UserProfile {
     var appleUserID: String?
     var email: String?
 
+    // Friend sharing settings
+    var isPublic: Bool
+    var shareRankings: Bool
+    var allowFriendRequests: Bool
+
     init(
         username: String,
         profileImageName: String? = nil,
         bio: String = "",
         appleUserID: String? = nil,
-        email: String? = nil
+        email: String? = nil,
+        isPublic: Bool = true,
+        shareRankings: Bool = true,
+        allowFriendRequests: Bool = true
     ) {
         self.id = UUID()
         self.username = username
@@ -32,5 +40,8 @@ class UserProfile {
         self.dateJoined = Date()
         self.appleUserID = appleUserID
         self.email = email
+        self.isPublic = isPublic
+        self.shareRankings = shareRankings
+        self.allowFriendRequests = allowFriendRequests
     }
 }
