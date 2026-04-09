@@ -2,4 +2,4 @@ Secrets.xcconfig
 Plans/FRIEND_SHARING_PLAN.md
 Plans/SUPABASE_RLS_POLICIES.sql
 Plans/SUPABASE_SCHEMA.md
-Views/Profile/claude.md
+Plans/claude.md
