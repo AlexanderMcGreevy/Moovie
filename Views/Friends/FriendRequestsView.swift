@@ -16,8 +16,16 @@ struct FriendRequestsView: View {
     @Query private var allRequests: [FriendRequest]
     @Query private var allFriends: [Friend]
 
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+    @State private var processingRequestId: UUID?
+
     private var currentProfile: UserProfile? {
         profiles.first
+    }
+
+    private var syncManager: SyncManager {
+        SyncManager.shared
     }
 
     private var pendingRequests: [FriendRequest] {
@@ -41,6 +49,31 @@ struct FriendRequestsView: View {
                     Button("Done") {
                         dismiss()
                     }
+                }
+            }
+            .onAppear {
+                Task {
+                    await fetchRequestsFromSupabase()
+                }
+            }
+            .refreshable {
+                await fetchRequestsFromSupabase()
+            }
+            .overlay {
+                if isLoading {
+                    ProgressView("Loading requests...")
+                        .padding()
+                        .background(.regularMaterial)
+                        .cornerRadius(12)
+                }
+            }
+            .alert("Error", isPresented: .constant(errorMessage != nil)) {
+                Button("OK") {
+                    errorMessage = nil
+                }
+            } message: {
+                if let error = errorMessage {
+                    Text(error)
                 }
             }
         }
@@ -75,8 +108,17 @@ struct FriendRequestsView: View {
             ForEach(pendingRequests, id: \.id) { request in
                 FriendRequestRow(
                     request: request,
-                    onAccept: { acceptRequest(request) },
-                    onDecline: { declineRequest(request) }
+                    isProcessing: processingRequestId == request.id,
+                    onAccept: {
+                        Task {
+                            await acceptRequest(request)
+                        }
+                    },
+                    onDecline: {
+                        Task {
+                            await declineRequest(request)
+                        }
+                    }
                 )
             }
         }
@@ -84,20 +126,60 @@ struct FriendRequestsView: View {
 
     // MARK: - Actions
 
-    private func acceptRequest(_ request: FriendRequest) {
+    private func fetchRequestsFromSupabase() async {
+        guard let profile = currentProfile, profile.appleUserID != nil else {
+            return
+        }
+
+        isLoading = true
+        errorMessage = nil
+
+        do {
+            let remoteRequests = try await syncManager.fetchFriendRequests(userId: profile.id)
+
+            // Merge remote requests with local requests
+            for remoteDTO in remoteRequests where remoteDTO.status == "pending" {
+                let requestExists = allRequests.contains {
+                    $0.fromUserId == remoteDTO.fromUserId && $0.toUserId == remoteDTO.toUserId
+                }
+
+                if !requestExists {
+                    let newRequest = FriendRequest(
+                        fromUserId: remoteDTO.fromUserId,
+                        fromUsername: remoteDTO.fromUserId.uuidString, // We'll need to fetch username from profiles
+                        toUserId: remoteDTO.toUserId,
+                        message: remoteDTO.message
+                    )
+                    newRequest.id = remoteDTO.id
+                    newRequest.dateSent = remoteDTO.dateSent
+                    modelContext.insert(newRequest)
+                }
+            }
+
+            try modelContext.save()
+            isLoading = false
+
+        } catch {
+            errorMessage = "Failed to load friend requests: \(error.localizedDescription)"
+            isLoading = false
+        }
+    }
+
+    private func acceptRequest(_ request: FriendRequest) async {
         guard let currentProfile = currentProfile else { return }
 
-        // Update request status
-        request.status = .accepted
-        request.dateResponded = Date()
+        processingRequestId = request.id
+        errorMessage = nil
 
-        // Find or create the Friend record
-        if let existingFriend = allFriends.first(where: {
-            $0.userId == currentProfile.id && $0.friendUserId == request.fromUserId
-        }) {
-            existingFriend.status = .accepted
-        } else {
-            // Create new friend connection
+        do {
+            // Accept via Supabase (creates reciprocal friendship)
+            try await syncManager.acceptFriendRequest(requestId: request.id)
+
+            // Update local request status
+            request.status = .accepted
+            request.dateResponded = Date()
+
+            // Create new friend connection locally
             let newFriend = Friend(
                 userId: currentProfile.id,
                 friendUserId: request.fromUserId,
@@ -105,33 +187,35 @@ struct FriendRequestsView: View {
                 status: .accepted
             )
             modelContext.insert(newFriend)
+
+            try modelContext.save()
+            processingRequestId = nil
+
+        } catch {
+            errorMessage = "Failed to accept friend request: \(error.localizedDescription)"
+            processingRequestId = nil
         }
-
-        // Create reciprocal friendship (so both users see each other)
-        let reciprocalFriend = Friend(
-            userId: request.fromUserId,
-            friendUserId: currentProfile.id,
-            friendUsername: currentProfile.username,
-            friendBio: currentProfile.bio,
-            status: .accepted
-        )
-        modelContext.insert(reciprocalFriend)
-
-        try? modelContext.save()
     }
 
-    private func declineRequest(_ request: FriendRequest) {
-        request.status = .declined
-        request.dateResponded = Date()
+    private func declineRequest(_ request: FriendRequest) async {
+        processingRequestId = request.id
+        errorMessage = nil
 
-        // Update any pending friend records
-        if let existingFriend = allFriends.first(where: {
-            $0.userId == currentProfile?.id && $0.friendUserId == request.fromUserId && $0.status == .pending
-        }) {
-            existingFriend.status = .declined
+        do {
+            // Decline via Supabase
+            try await syncManager.declineFriendRequest(requestId: request.id)
+
+            // Update local request status
+            request.status = .declined
+            request.dateResponded = Date()
+
+            try modelContext.save()
+            processingRequestId = nil
+
+        } catch {
+            errorMessage = "Failed to decline friend request: \(error.localizedDescription)"
+            processingRequestId = nil
         }
-
-        try? modelContext.save()
     }
 }
 
@@ -139,6 +223,7 @@ struct FriendRequestsView: View {
 
 struct FriendRequestRow: View {
     let request: FriendRequest
+    var isProcessing: Bool = false
     let onAccept: () -> Void
     let onDecline: () -> Void
 
@@ -177,15 +262,23 @@ struct FriendRequestRow: View {
                 Button {
                     onAccept()
                 } label: {
-                    Text("Accept")
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(Color.blue)
-                        .cornerRadius(8)
+                    HStack {
+                        if isProcessing {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(0.8)
+                        }
+                        Text(isProcessing ? "Processing..." : "Accept")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(Color.blue)
+                    .cornerRadius(8)
                 }
+                .disabled(isProcessing)
 
                 Button {
                     onDecline()
@@ -199,6 +292,7 @@ struct FriendRequestRow: View {
                         .background(Color.red.opacity(0.1))
                         .cornerRadius(8)
                 }
+                .disabled(isProcessing)
             }
             .padding(.leading, 62)
         }

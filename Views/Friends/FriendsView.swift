@@ -16,9 +16,15 @@ struct FriendsView: View {
 
     @State private var showingAddFriend = false
     @State private var showingRequests = false
+    @State private var isLoading = false
+    @State private var errorMessage: String?
 
     private var currentProfile: UserProfile? {
         profiles.first
+    }
+
+    private var syncManager: SyncManager {
+        SyncManager.shared
     }
 
     private var myFriends: [Friend] {
@@ -54,6 +60,31 @@ struct FriendsView: View {
         }
         .sheet(isPresented: $showingRequests) {
             FriendRequestsView()
+        }
+        .onAppear {
+            Task {
+                await fetchFriendsFromSupabase()
+            }
+        }
+        .refreshable {
+            await fetchFriendsFromSupabase()
+        }
+        .overlay {
+            if isLoading {
+                ProgressView("Loading friends...")
+                    .padding()
+                    .background(.regularMaterial)
+                    .cornerRadius(12)
+            }
+        }
+        .alert("Error", isPresented: .constant(errorMessage != nil)) {
+            Button("OK") {
+                errorMessage = nil
+            }
+        } message: {
+            if let error = errorMessage {
+                Text(error)
+            }
         }
     }
 
@@ -146,10 +177,66 @@ struct FriendsView: View {
 
     // MARK: - Helper Functions
 
+    private func fetchFriendsFromSupabase() async {
+        guard let profile = currentProfile, profile.appleUserID != nil else {
+            return
+        }
+
+        isLoading = true
+        errorMessage = nil
+
+        do {
+            let remoteFriends = try await syncManager.fetchFriends(userId: profile.id)
+
+            // Merge remote friends with local friends
+            for remoteDTO in remoteFriends {
+                // Check if friend already exists locally by matching userId and friendUserId
+                let friendExists = allFriends.contains {
+                    $0.userId == remoteDTO.userId && $0.friendUserId == remoteDTO.friendUserId
+                }
+
+                if !friendExists {
+                    // Create new local friend
+                    let newFriend = Friend(
+                        userId: remoteDTO.userId,
+                        friendUserId: remoteDTO.friendUserId,
+                        friendUsername: remoteDTO.friendUsername,
+                        status: FriendStatus(rawValue: remoteDTO.status) ?? .pending
+                    )
+                    // Preserve remote ID and date
+                    newFriend.id = remoteDTO.id
+                    newFriend.dateAdded = remoteDTO.dateAdded
+                    modelContext.insert(newFriend)
+                }
+            }
+
+            try modelContext.save()
+            isLoading = false
+
+        } catch {
+            errorMessage = "Failed to load friends: \(error.localizedDescription)"
+            isLoading = false
+        }
+    }
+
     private func deleteFriend(at offsets: IndexSet) {
         for index in offsets {
             let friend = myFriends[index]
+            let friendId = friend.id
+
+            // Delete locally
             modelContext.delete(friend)
+
+            // Delete from Supabase
+            Task {
+                do {
+                    try await syncManager.deleteFriend(friendshipId: friendId)
+                } catch {
+                    await MainActor.run {
+                        errorMessage = "Failed to delete friend from server: \(error.localizedDescription)"
+                    }
+                }
+            }
         }
         try? modelContext.save()
     }

@@ -16,6 +16,15 @@ struct RankingView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @State private var rankingsManager: RankingsManager
+    @Query private var profiles: [UserProfile]
+
+    private var currentProfile: UserProfile? {
+        profiles.first
+    }
+
+    private var syncManager: SyncManager {
+        SyncManager.shared
+    }
 
     // Ranking flow states
     @State private var currentStep: RankingStep = .universal
@@ -491,6 +500,18 @@ struct RankingView: View {
                 rankPosition = allRankings.firstIndex(where: { $0.id == movieRanking.id }).map { $0 + 1 }
                 finalRanking = movieRanking
                 print("✅ Ranking saved successfully! Position: #\(rankPosition ?? 0)")
+
+                // Sync to Supabase
+                if let profile = currentProfile, profile.appleUserID != nil {
+                    Task {
+                        do {
+                            try await syncManager.syncRanking(movieRanking, userId: profile.id)
+                            print("☁️ Ranking synced to Supabase")
+                        } catch {
+                            print("⚠️ Failed to sync ranking to Supabase: \(error.localizedDescription)")
+                        }
+                    }
+                }
             } else {
                 print("⚠️ Warning: Ranking saved but couldn't find it in the list")
             }

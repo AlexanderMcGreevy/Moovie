@@ -4,5 +4,9 @@
 <dict>
 	<key>TMDB_READ_TOKEN</key>
 	<string>$(TMDB_READ_TOKEN)</string>
+	<key>SUPABASE_URL</key>
+	<string>$(SUPABASE_URL)</string>
+	<key>SUPABASE_ANON_KEY</key>
+	<string>$(SUPABASE_ANON_KEY)</string>
 </dict>
 </plist>

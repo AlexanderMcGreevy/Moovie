@@ -61,11 +61,20 @@ enum RankingSortOption: String, CaseIterable, Identifiable {
 struct MyRankingView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \UserMovieRanking.finalScore, order: .reverse) private var rankings: [UserMovieRanking]
+    @Query private var profiles: [UserProfile]
 
     @State private var rankingToEdit: UserMovieRanking?
     @State private var rankingToDelete: UserMovieRanking?
     @State private var showingDeleteAlert = false
     @State private var sortOption: RankingSortOption = .overall
+
+    private var currentProfile: UserProfile? {
+        profiles.first
+    }
+
+    private var syncManager: SyncManager {
+        SyncManager.shared
+    }
 
     var sortedRankings: [UserMovieRanking] {
         if sortOption == .overall {
@@ -222,8 +231,23 @@ struct MyRankingView: View {
     }
 
     private func deleteRanking(_ ranking: UserMovieRanking) {
+        let rankingId = ranking.id
+
+        // Delete locally
         modelContext.delete(ranking)
         try? modelContext.save()
+
+        // Delete from Supabase
+        if let profile = currentProfile, profile.appleUserID != nil {
+            Task {
+                do {
+                    try await syncManager.deleteRanking(rankingId)
+                    print("☁️ Ranking deleted from Supabase")
+                } catch {
+                    print("⚠️ Failed to delete ranking from Supabase: \(error.localizedDescription)")
+                }
+            }
+        }
     }
 }
 

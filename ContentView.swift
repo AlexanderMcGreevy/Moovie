@@ -16,10 +16,11 @@ struct ContentView: View {
                 .tabItem { Label("Add", systemImage: "plus") }
             NavigationStack { TopMoviesView() }
                 .tabItem { Label("Movies", systemImage: "star") }
-            NavigationStack { FriendsView() }
-                .tabItem { Label("Friends", systemImage: "person.3.fill") }
             NavigationStack { ProfileView() }
                 .tabItem { Label("Profile", systemImage: "person.circle.fill") }
+            NavigationStack { FriendsView() }
+                .tabItem { Label("Friends", systemImage: "person.3.fill") }
+
         }
     }
 }

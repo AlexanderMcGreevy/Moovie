@@ -2,12 +2,11 @@
 //  ProfileView.swift
 //  Moovie
 //
-//  Created by Alexander McGreevy on 4/6/26.
+//  Created by Claude Code on 4/9/26.
 //
 
 import SwiftUI
 import SwiftData
-import Kingfisher
 import AuthenticationServices
 
 struct ProfileView: View {
@@ -15,14 +14,13 @@ struct ProfileView: View {
     @Query private var profiles: [UserProfile]
     @Query(sort: \UserMovieRanking.finalScore, order: .reverse) private var rankings: [UserMovieRanking]
 
-    @State private var showingEditProfile = false
+    @State private var showingEditSheet = false
+    @State private var showingSettingsSheet = false
+    @State private var isSyncing = false
+    @State private var syncError: String?
 
     private var currentProfile: UserProfile? {
         profiles.first
-    }
-
-    private var favoriteMovie: UserMovieRanking? {
-        rankings.first
     }
 
     private var isSignedIn: Bool {
@@ -31,33 +29,11 @@ struct ProfileView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 24) {
-                if isSignedIn {
-                    // Profile Header
-                    profileHeader
-
-                    // Stats Section
-                    statsSection
-
-                    // Favorite Movie Section (above genre sections)
-                    if let favorite = favoriteMovie {
-                        VStack(spacing: 8) {
-                            Divider()
-                            favoritesSection(favorite: favorite)
-                            Divider()
-                        }
-                    }
-
-                    // Top Movies by Genre
-                    topMoviesByGenreSection
-
-                    Spacer(minLength: 40)
-                } else {
-                    // Sign in prompt
-                    signInPrompt
-                }
+            if isSignedIn, let profile = currentProfile {
+                signedInView(profile: profile)
+            } else {
+                signInView()
             }
-            .padding()
         }
         .navigationTitle("Profile")
         .toolbar {
@@ -65,9 +41,21 @@ struct ProfileView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
                         Button {
-                            showingEditProfile = true
+                            showingEditSheet = true
                         } label: {
                             Label("Edit Profile", systemImage: "pencil")
+                        }
+
+                        Button {
+                            showingSettingsSheet = true
+                        } label: {
+                            Label("Settings", systemImage: "gear")
+                        }
+
+                        Button {
+                            Task { await syncToSupabase() }
+                        } label: {
+                            Label("Sync Now", systemImage: "arrow.triangle.2.circlepath")
                         }
 
                         Divider()
@@ -75,7 +63,7 @@ struct ProfileView: View {
                         Button(role: .destructive) {
                             signOut()
                         } label: {
-                            Label("Sign Out", systemImage: "arrow.right.square")
+                            Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
                         }
                     } label: {
                         Image(systemName: "ellipsis.circle")
@@ -83,35 +71,45 @@ struct ProfileView: View {
                 }
             }
         }
-        .sheet(isPresented: $showingEditProfile) {
-            EditProfileView(profile: currentProfile)
+        .sheet(isPresented: $showingEditSheet) {
+            if let profile = currentProfile {
+                EditProfileView(profile: profile)
+            }
         }
-        .onAppear {
-            ensureProfileExists()
+        .sheet(isPresented: $showingSettingsSheet) {
+            if let profile = currentProfile {
+                SettingsView(profile: profile)
+            }
+        }
+        .overlay {
+            if isSyncing {
+                ProgressView("Syncing...")
+                    .padding()
+                    .background(.regularMaterial)
+                    .cornerRadius(12)
+            }
         }
     }
 
-    // MARK: - Sign In Prompt
+    // MARK: - Sign In View
 
-    private var signInPrompt: some View {
-        VStack(spacing: 32) {
+    private func signInView() -> some View {
+        VStack(spacing: 24) {
             Spacer()
 
             Image(systemName: "person.circle.fill")
-                .font(.system(size: 100))
-                .foregroundColor(.blue.opacity(0.5))
+                .font(.system(size: 80))
+                .foregroundColor(.gray)
 
-            VStack(spacing: 16) {
-                Text("Welcome to Moovie")
-                    .font(.title)
-                    .fontWeight(.bold)
+            Text("Welcome to Moovie")
+                .font(.title)
+                .fontWeight(.bold)
 
-                Text("Sign in with Apple to save your rankings and sync across devices")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
-            }
+            Text("Sign in to sync your rankings and connect with friends")
+                .font(.body)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
 
             SignInWithAppleButton(
                 onRequest: { request in
@@ -121,218 +119,208 @@ struct ProfileView: View {
                     handleSignInWithApple(result: result)
                 }
             )
-            .signInWithAppleButtonStyle(.black)
             .frame(height: 50)
             .padding(.horizontal, 40)
+            .signInWithAppleButtonStyle(.black)
+
+            if let error = syncError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.red)
+                    .padding(.horizontal, 40)
+            }
 
             Spacer()
         }
     }
 
-    // MARK: - Profile Header
+    // MARK: - Signed In View
 
-    private var profileHeader: some View {
-        VStack(spacing: 16) {
-            // Profile Picture
-            if let imageName = currentProfile?.profileImageName, !imageName.isEmpty {
-                Image(imageName)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 120, height: 120)
-                    .clipShape(Circle())
-                    .overlay(Circle().stroke(Color.blue, lineWidth: 3))
-            } else {
-                Circle()
-                    .fill(Color.blue.opacity(0.2))
-                    .frame(width: 120, height: 120)
-                    .overlay(
-                        Image(systemName: "person.fill")
-                            .font(.system(size: 50))
-                            .foregroundColor(.blue)
-                    )
-                    .overlay(Circle().stroke(Color.blue, lineWidth: 3))
+    private func signedInView(profile: UserProfile) -> some View {
+        VStack(spacing: 20) {
+            // Header
+            VStack(spacing: 12) {
+                Image(systemName: "person.crop.circle.fill")
+                    .font(.system(size: 80))
+                    .foregroundColor(.blue)
+
+                Text(profile.username)
+                    .font(.title2)
+                    .fontWeight(.bold)
+
+                if !profile.bio.isEmpty {
+                    Text(profile.bio)
+                        .font(.body)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 40)
+                }
             }
+            .padding(.top)
 
-            // Username
-            Text(currentProfile?.username ?? "Movie Lover")
-                .font(.title)
-                .fontWeight(.bold)
+            // Stats
+            HStack(spacing: 40) {
+                StatCard(title: "Movies Rated", value: "\(rankings.count)")
+                StatCard(title: "Member Since", value: formatDate(profile.dateJoined))
+            }
+            .padding(.horizontal)
 
-            // Bio
-            if let bio = currentProfile?.bio, !bio.isEmpty {
-                Text(bio)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
+            if let favorite = rankings.first {
+                Divider()
+                    .padding(.horizontal)
+
+                // Favorite Movie Section
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Favorite Movie")
+                        .font(.headline)
+                        .padding(.horizontal)
+
+                    NavigationLink(destination: DetailedMovieView(movie: createMovieInfo(from: favorite))) {
+                        FavoriteMovieRow(ranking: favorite)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+
+                Divider()
                     .padding(.horizontal)
             }
+
+            // Top Movies by Genre
+            if !rankings.isEmpty {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Top Movies by Genre")
+                        .font(.headline)
+                        .padding(.horizontal)
+
+                    GenreSection(title: "Horror 💀", rankings: rankings, genreKey: "scariness")
+                    GenreSection(title: "Comedy 🤣", rankings: rankings, genreKey: "funniness")
+                    GenreSection(title: "Action 💥", rankings: rankings, genreKey: "actionIntensity")
+                    GenreSection(title: "Sci-Fi 🌌", rankings: rankings, genreKey: "mindBending")
+                    GenreSection(title: "Drama 💔", rankings: rankings, genreKey: "emotionalDepth")
+                    GenreSection(title: "Romance 💖", rankings: rankings, genreKey: "romanceLevel")
+                    GenreSection(title: "Thriller 😱", rankings: rankings, genreKey: "suspense")
+                }
+            }
+
+            Spacer(minLength: 40)
         }
-        .padding(.vertical)
     }
 
-    // MARK: - Stats Section
+    // MARK: - Authentication
 
-    private var statsSection: some View {
-        HStack(spacing: 40) {
-            StatCard(title: "Movies Rated", value: "\(rankings.count)")
-            StatCard(title: "Member Since", value: memberSinceText)
+    private func handleSignInWithApple(result: Result<ASAuthorization, Error>) {
+        switch result {
+        case .success(let authorization):
+            guard let appleIDCredential = authorization.credential as? ASAuthorizationAppleIDCredential else {
+                syncError = "Failed to get Apple ID credentials"
+                return
+            }
+
+            let appleUserID = appleIDCredential.user
+            let email = appleIDCredential.email
+            let fullName = appleIDCredential.fullName
+
+            // Get username from name or use default
+            var username = "User"
+            if let givenName = fullName?.givenName, let familyName = fullName?.familyName {
+                username = "\(givenName) \(familyName)"
+            } else if let givenName = fullName?.givenName {
+                username = givenName
+            }
+
+            // Create or update local profile
+            if let existingProfile = currentProfile {
+                existingProfile.appleUserID = appleUserID
+                existingProfile.email = email
+                if existingProfile.username == "User" {
+                    existingProfile.username = username
+                }
+            } else {
+                let newProfile = UserProfile(
+                    username: username,
+                    appleUserID: appleUserID,
+                    email: email
+                )
+                modelContext.insert(newProfile)
+            }
+
+            try? modelContext.save()
+
+            // Sync to Supabase
+            Task {
+                await syncToSupabase()
+            }
+
+        case .failure(let error):
+            syncError = "Sign in failed: \(error.localizedDescription)"
         }
-        .padding()
-        .background(Color(.systemGray6))
-        .cornerRadius(12)
     }
 
-    private var memberSinceText: String {
-        guard let joinDate = currentProfile?.dateJoined else { return "2026" }
+    private func signOut() {
+        guard let profile = currentProfile else { return }
+        profile.appleUserID = nil
+        try? modelContext.save()
+    }
+
+    // MARK: - Supabase Sync
+
+    private func syncToSupabase() async {
+        guard let profile = currentProfile, let appleUserID = profile.appleUserID else {
+            return
+        }
+
+        isSyncing = true
+        syncError = nil
+
+        do {
+            // Sync profile to Supabase via Auth sign in
+            _ = try await SupabaseManager.shared.signInWithApple(
+                appleUserID: appleUserID,
+                email: profile.email,
+                fullName: profile.username
+            )
+
+            // Sync all rankings
+            for ranking in rankings {
+                let rankingDTO = MovieRankingDTO(
+                    id: ranking.id,
+                    userId: profile.id,
+                    movieId: ranking.movieId,
+                    movieTitle: ranking.movieTitle,
+                    posterPath: ranking.posterPath,
+                    releaseDate: ranking.releaseDate,
+                    finalScore: ranking.finalScore,
+                    enjoyment: ranking.enjoyment,
+                    story: ranking.story,
+                    acting: ranking.acting,
+                    soundtrack: ranking.soundtrack,
+                    rewatchability: ranking.rewatchability,
+                    genreScores: ranking.genreScores,
+                    dateRanked: ranking.dateRanked,
+                    lastUpdated: ranking.lastModified
+                )
+
+                try await SupabaseManager.shared.upsertRanking(rankingDTO)
+            }
+
+            await MainActor.run {
+                isSyncing = false
+            }
+
+        } catch {
+            await MainActor.run {
+                syncError = "Sync failed: \(error.localizedDescription)"
+                isSyncing = false
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func formatDate(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "MMM yyyy"
-        return formatter.string(from: joinDate)
-    }
-
-    // MARK: - Favorite Movie Section
-
-    private func favoritesSection(favorite: UserMovieRanking) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Favorite Movie")
-                .font(.title2)
-                .fontWeight(.bold)
-
-            NavigationLink(destination: DetailedMovieView(movie: createMovieInfo(from: favorite))) {
-                HStack(spacing: 16) {
-                    // Poster
-                    if let posterPath = favorite.posterPath, !posterPath.isEmpty {
-                        let imageURL = "https://image.tmdb.org/t/p/w185\(posterPath)"
-                        KFImage(URL(string: imageURL))
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 80, height: 120)
-                            .cornerRadius(8)
-                            .clipped()
-                    } else {
-                        Rectangle()
-                            .fill(Color(.systemGray5))
-                            .frame(width: 80, height: 120)
-                            .cornerRadius(8)
-                    }
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(favorite.movieTitle)
-                            .font(.headline)
-                            .lineLimit(2)
-                            .foregroundColor(.primary)
-
-                        Text(favorite.releaseDate)
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-
-                        HStack(spacing: 8) {
-                            Image(systemName: "star.fill")
-                                .foregroundColor(.yellow)
-                                .font(.caption)
-                            Text(String(format: "%.1f", Double(favorite.finalScore) / 1000))
-                                .font(.subheadline)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.primary)
-                        }
-                    }
-
-                    Spacer()
-
-                    Image(systemName: "chevron.right")
-                        .foregroundColor(.secondary)
-                        .font(.caption)
-                }
-                .padding()
-                .background(Color(.systemGray6))
-                .cornerRadius(12)
-            }
-        }
-    }
-
-    // MARK: - Top Movies by Genre
-
-    private var topMoviesByGenreSection: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("Top Movies by Genre")
-                .font(.title2)
-                .fontWeight(.bold)
-
-            // Horror
-            if let topHorror = getTopMovieForGenre("scariness") {
-                GenreTopMovieRow(
-                    genreTitle: "Horror 💀",
-                    movie: topHorror,
-                    genreScoreKey: "scariness"
-                )
-            }
-
-            // Comedy
-            if let topComedy = getTopMovieForGenre("funniness") {
-                GenreTopMovieRow(
-                    genreTitle: "Comedy 🤣",
-                    movie: topComedy,
-                    genreScoreKey: "funniness"
-                )
-            }
-
-            // Action
-            if let topAction = getTopMovieForGenre("actionIntensity") {
-                GenreTopMovieRow(
-                    genreTitle: "Action 💥",
-                    movie: topAction,
-                    genreScoreKey: "actionIntensity"
-                )
-            }
-
-            // Sci-Fi
-            if let topSciFi = getTopMovieForGenre("mindBending") {
-                GenreTopMovieRow(
-                    genreTitle: "Sci-Fi 🌌",
-                    movie: topSciFi,
-                    genreScoreKey: "mindBending"
-                )
-            }
-
-            // Drama
-            if let topDrama = getTopMovieForGenre("emotionalDepth") {
-                GenreTopMovieRow(
-                    genreTitle: "Drama 💔",
-                    movie: topDrama,
-                    genreScoreKey: "emotionalDepth"
-                )
-            }
-
-            // Romance
-            if let topRomance = getTopMovieForGenre("romanceLevel") {
-                GenreTopMovieRow(
-                    genreTitle: "Romance 💖",
-                    movie: topRomance,
-                    genreScoreKey: "romanceLevel"
-                )
-            }
-
-            // Thriller
-            if let topThriller = getTopMovieForGenre("suspense") {
-                GenreTopMovieRow(
-                    genreTitle: "Thriller 😱",
-                    movie: topThriller,
-                    genreScoreKey: "suspense"
-                )
-            }
-        }
-    }
-
-    // MARK: - Helper Functions
-
-    private func getTopMovieForGenre(_ genreKey: String) -> UserMovieRanking? {
-        rankings
-            .filter { $0.genreScores[genreKey] != nil }
-            .sorted { first, second in
-                let firstScore = first.genreScores[genreKey] ?? 0
-                let secondScore = second.genreScores[genreKey] ?? 0
-                return firstScore > secondScore
-            }
-            .first
+        return formatter.string(from: date)
     }
 
     private func createMovieInfo(from ranking: UserMovieRanking) -> MovieInfo {
@@ -344,59 +332,9 @@ struct ProfileView: View {
             poster_path: ranking.posterPath
         )
     }
-
-    private func handleSignInWithApple(result: Result<ASAuthorization, Error>) {
-        switch result {
-        case .success(let authorization):
-            if let appleIDCredential = authorization.credential as? ASAuthorizationAppleIDCredential {
-                let userID = appleIDCredential.user
-                let email = appleIDCredential.email
-                let fullName = appleIDCredential.fullName
-
-                // Create or update profile
-                if let existingProfile = currentProfile {
-                    existingProfile.appleUserID = userID
-                    if let email = email {
-                        existingProfile.email = email
-                    }
-                    if let givenName = fullName?.givenName {
-                        existingProfile.username = givenName
-                    }
-                } else {
-                    let username = fullName?.givenName ?? "Movie Lover"
-                    let newProfile = UserProfile(
-                        username: username,
-                        appleUserID: userID,
-                        email: email
-                    )
-                    modelContext.insert(newProfile)
-                }
-
-                try? modelContext.save()
-            }
-        case .failure(let error):
-            print("Sign in with Apple failed: \(error.localizedDescription)")
-        }
-    }
-
-    private func signOut() {
-        if let profile = currentProfile {
-            profile.appleUserID = nil
-            profile.email = nil
-            try? modelContext.save()
-        }
-    }
-
-    private func ensureProfileExists() {
-        // Only create a profile if user is not signed in
-        // Profile will be created during sign-in flow
-        if profiles.isEmpty {
-            // Don't auto-create, let user sign in first
-        }
-    }
 }
 
-// MARK: - Stat Card Component
+// MARK: - Components
 
 struct StatCard: View {
     let title: String
@@ -407,8 +345,6 @@ struct StatCard: View {
             Text(value)
                 .font(.title)
                 .fontWeight(.bold)
-                .foregroundColor(.blue)
-
             Text(title)
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -416,71 +352,73 @@ struct StatCard: View {
     }
 }
 
-// MARK: - Genre Top Movie Row
+struct FavoriteMovieRow: View {
+    let ranking: UserMovieRanking
 
-struct GenreTopMovieRow: View {
-    let genreTitle: String
-    let movie: UserMovieRanking
-    let genreScoreKey: String
+    var body: some View {
+        HStack(spacing: 16) {
+            AsyncImage(url: URL(string: "https://image.tmdb.org/t/p/w185\(ranking.posterPath ?? "")")) { image in
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } placeholder: {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
+            }
+            .frame(width: 60, height: 90)
+            .cornerRadius(8)
 
-    var genreScore: Int {
-        movie.genreScores[genreScoreKey] ?? 0
+            VStack(alignment: .leading, spacing: 6) {
+                Text(ranking.movieTitle)
+                    .font(.headline)
+                    .lineLimit(2)
+
+                Text(ranking.releaseDate)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+
+                Text("\(String(format: "%.1f", Double(ranking.finalScore) / 1000))/10")
+                    .font(.title3)
+                    .fontWeight(.bold)
+                    .foregroundColor(.blue)
+            }
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .foregroundColor(.gray)
+        }
+        .padding()
+        .background(Color.gray.opacity(0.1))
+        .cornerRadius(12)
+        .padding(.horizontal)
+    }
+}
+
+struct GenreSection: View {
+    let title: String
+    let rankings: [UserMovieRanking]
+    let genreKey: String
+
+    private var topMovie: UserMovieRanking? {
+        rankings
+            .filter { $0.genreScores[genreKey] != nil }
+            .max { ($0.genreScores[genreKey] ?? 0) < ($1.genreScores[genreKey] ?? 0) }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(genreTitle)
-                .font(.headline)
+        if let movie = topMovie {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal)
 
-            NavigationLink(destination: DetailedMovieView(movie: createMovieInfo(from: movie))) {
-                HStack(spacing: 12) {
-                    // Poster
-                    if let posterPath = movie.posterPath, !posterPath.isEmpty {
-                        let imageURL = "https://image.tmdb.org/t/p/w92\(posterPath)"
-                        KFImage(URL(string: imageURL))
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 60, height: 90)
-                            .cornerRadius(8)
-                            .clipped()
-                    } else {
-                        Rectangle()
-                            .fill(Color(.systemGray5))
-                            .frame(width: 60, height: 90)
-                            .cornerRadius(8)
-                    }
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(movie.movieTitle)
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                            .lineLimit(2)
-                            .foregroundColor(.primary)
-
-                        Text(movie.releaseDate)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-
-                        HStack(spacing: 4) {
-                            Text("Score:")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Text("\(genreScore)")
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.blue)
-                        }
-                    }
-
-                    Spacer()
-
-                    Image(systemName: "chevron.right")
-                        .foregroundColor(.secondary)
-                        .font(.caption2)
+                NavigationLink(destination: DetailedMovieView(movie: createMovieInfo(from: movie))) {
+                    GenreMovieRow(ranking: movie, genreKey: genreKey)
                 }
-                .padding(12)
-                .background(Color(.systemGray6))
-                .cornerRadius(8)
+                .buttonStyle(PlainButtonStyle())
             }
         }
     }
@@ -496,22 +434,62 @@ struct GenreTopMovieRow: View {
     }
 }
 
+struct GenreMovieRow: View {
+    let ranking: UserMovieRanking
+    let genreKey: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            AsyncImage(url: URL(string: "https://image.tmdb.org/t/p/w92\(ranking.posterPath ?? "")")) { image in
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } placeholder: {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
+            }
+            .frame(width: 40, height: 60)
+            .cornerRadius(6)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(ranking.movieTitle)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+
+                Text(ranking.releaseDate)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            if let score = ranking.genreScores[genreKey] {
+                Text("\(score)")
+                    .font(.headline)
+                    .foregroundColor(.blue)
+            }
+
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundColor(.gray)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(Color.gray.opacity(0.05))
+        .cornerRadius(8)
+        .padding(.horizontal)
+    }
+}
+
 // MARK: - Edit Profile View
 
 struct EditProfileView: View {
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var modelContext
+    let profile: UserProfile
 
-    let profile: UserProfile?
-
-    @State private var username: String
-    @State private var bio: String
-
-    init(profile: UserProfile?) {
-        self.profile = profile
-        _username = State(initialValue: profile?.username ?? "Movie Lover")
-        _bio = State(initialValue: profile?.bio ?? "")
-    }
+    @State private var username: String = ""
+    @State private var bio: String = ""
 
     var body: some View {
         NavigationStack {
@@ -530,208 +508,110 @@ struct EditProfileView: View {
                         dismiss()
                     }
                 }
-
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        saveProfile()
+                        profile.username = username
+                        profile.bio = bio
+                        dismiss()
+                    }
+                }
+            }
+            .onAppear {
+                username = profile.username
+                bio = profile.bio
+            }
+        }
+    }
+}
+
+// MARK: - Settings View
+
+struct SettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    let profile: UserProfile
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Privacy") {
+                    Toggle("Public Profile", isOn: Binding(
+                        get: { profile.isPublic },
+                        set: { profile.isPublic = $0 }
+                    ))
+
+                    Toggle("Share Rankings", isOn: Binding(
+                        get: { profile.shareRankings },
+                        set: { profile.shareRankings = $0 }
+                    ))
+
+                    Toggle("Allow Friend Requests", isOn: Binding(
+                        get: { profile.allowFriendRequests },
+                        set: { profile.allowFriendRequests = $0 }
+                    ))
+                }
+
+                Section("Account") {
+                    if let email = profile.email {
+                        LabeledContent("Email", value: email)
+                    }
+                    LabeledContent("User ID", value: profile.id.uuidString.prefix(8))
+                }
+            }
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
                         dismiss()
                     }
                 }
             }
         }
     }
-
-    private func saveProfile() {
-        if let existingProfile = profile {
-            existingProfile.username = username
-            existingProfile.bio = bio
-        } else {
-            let newProfile = UserProfile(username: username, bio: bio)
-            modelContext.insert(newProfile)
-        }
-        try? modelContext.save()
-    }
 }
 
 // MARK: - Preview
 
 #Preview {
-    let container = try! ModelContainer(
-        for: UserProfile.self, UserMovieRanking.self,
-        configurations: ModelConfiguration(isStoredInMemoryOnly: true)
-    )
+    let config = ModelConfiguration(isStoredInMemoryOnly: true)
+    let container = try! ModelContainer(for: UserProfile.self, UserMovieRanking.self, configurations: config)
 
-    // Create test profile (bypassing Apple sign-in for preview)
+    // Create preview profile
     let profile = UserProfile(
-        username: "Alex",
-        bio: "Passionate movie lover and critic",
+        username: "Sarah",
+        bio: "Movie enthusiast and critic",
         appleUserID: "preview-user-id",
-        email: "alex@preview.com"
+        email: "sarah@example.com"
     )
     container.mainContext.insert(profile)
 
-    // Create diverse test rankings covering all genres
+    // Create preview rankings
+    let movies: [(title: String, year: String, score: Int, genreKey: String, genreScore: Int, poster: String)] = [
+        ("Parasite", "2019", 9800, "emotionalDepth", 92, "/7IiTTgloJzvGI1TAYymCfbfl3vT.jpg"),
+        ("The Shining", "1980", 9500, "scariness", 98, "/xazWoLealQwEgqZ89MLZklLZD3k.jpg"),
+        ("The Grand Budapest Hotel", "2014", 9200, "funniness", 85, "/eWdyYQreja6JGCzqHWXpWHDrrPo.jpg"),
+        ("Mad Max: Fury Road", "2015", 9400, "actionIntensity", 99, "/8tZYtuWezp8JbcsvHYO0O46tFbo.jpg"),
+        ("Interstellar", "2014", 9600, "mindBending", 96, "/gEU2QniE6E77NI6lCU6MxlNBvIx.jpg"),
+        ("La La Land", "2016", 8800, "romanceLevel", 85, "/uDO8zWDhfWwoFdKS4fzkUJt0Rf0.jpg"),
+        ("Se7en", "1995", 9300, "suspense", 97, "/6yoghtyTpznpBik8EngEmJskVUO.jpg")
+    ]
 
-    // Favorite movie (highest score)
-    let parasite = UserMovieRanking(
-        movieId: 496243,
-        movieTitle: "Parasite",
-        posterPath: "/7IiTTgloJzvGI1TAYymCfbfl3vT.jpg",
-        releaseDate: "2019-05-30",
-        finalScore: 9800,
-        enjoyment: 98,
-        story: 100,
-        acting: 95,
-        soundtrack: 90,
-        rewatchability: 92,
-        genreScores: ["emotionalDepth": 95, "suspense": 92, "mysteryIntrigue": 88]
-    )
-
-    // Horror
-    let theShining = UserMovieRanking(
-        movieId: 694,
-        movieTitle: "The Shining",
-        posterPath: "/xazWoLealQwEgqZ89MLZklLZD3k.jpg",
-        releaseDate: "1980-05-23",
-        finalScore: 9500,
-        enjoyment: 90,
-        story: 85,
-        acting: 95,
-        soundtrack: 88,
-        rewatchability: 80,
-        genreScores: ["scariness": 98, "suspense": 90]
-    )
-
-    // Comedy
-    let grandBudapest = UserMovieRanking(
-        movieId: 120467,
-        movieTitle: "The Grand Budapest Hotel",
-        posterPath: "/eWdyYQreja6JGCzqHWXpWHDrrPo.jpg",
-        releaseDate: "2014-03-07",
-        finalScore: 9200,
-        enjoyment: 98,
-        story: 88,
-        acting: 90,
-        soundtrack: 92,
-        rewatchability: 88,
-        genreScores: ["funniness": 85, "visualCreativity": 95]
-    )
-
-    // Action
-    let madMax = UserMovieRanking(
-        movieId: 76341,
-        movieTitle: "Mad Max: Fury Road",
-        posterPath: "/hA2ple9q4qnwxp3hKVNhroipsir.jpg",
-        releaseDate: "2015-05-15",
-        finalScore: 9000,
-        enjoyment: 95,
-        story: 80,
-        acting: 88,
-        soundtrack: 95,
-        rewatchability: 92,
-        genreScores: ["actionIntensity": 99, "adventureScale": 95]
-    )
-
-    // Sci-Fi
-    let interstellar = UserMovieRanking(
-        movieId: 157336,
-        movieTitle: "Interstellar",
-        posterPath: "/gEU2QniE6E77NI6lCU6MxlNBvIx.jpg",
-        releaseDate: "2014-11-05",
-        finalScore: 9400,
-        enjoyment: 92,
-        story: 95,
-        acting: 90,
-        soundtrack: 100,
-        rewatchability: 85,
-        genreScores: ["mindBending": 96, "emotionalDepth": 88, "adventureScale": 92]
-    )
-
-    // Romance
-    let lalaland = UserMovieRanking(
-        movieId: 313369,
-        movieTitle: "La La Land",
-        posterPath: "/uDO8zWDhfWwoFdKS4fzkUJt0Rf0.jpg",
-        releaseDate: "2016-12-09",
-        finalScore: 8800,
-        enjoyment: 90,
-        story: 82,
-        acting: 88,
-        soundtrack: 98,
-        rewatchability: 82,
-        genreScores: ["romanceLevel": 92, "soundtrackQuality": 98, "emotionalDepth": 85]
-    )
-
-    // Thriller
-    let seVen = UserMovieRanking(
-        movieId: 807,
-        movieTitle: "Se7en",
-        posterPath: "/6yoghtyTpznpBik8EngEmJskVUO.jpg",
-        releaseDate: "1995-09-22",
-        finalScore: 9100,
-        enjoyment: 88,
-        story: 92,
-        acting: 95,
-        soundtrack: 85,
-        rewatchability: 78,
-        genreScores: ["suspense": 97, "mysteryIntrigue": 90, "emotionalDepth": 75]
-    )
-
-    // Drama
-    let shawshank = UserMovieRanking(
-        movieId: 278,
-        movieTitle: "The Shawshank Redemption",
-        posterPath: "/q6y0Go1tsGEsmtFryDOJo3dEmqu.jpg",
-        releaseDate: "1994-09-23",
-        finalScore: 9600,
-        enjoyment: 95,
-        story: 98,
-        acting: 96,
-        soundtrack: 88,
-        rewatchability: 90,
-        genreScores: ["emotionalDepth": 98, "suspense": 75]
-    )
-
-    // Additional movies for variety
-    let inception = UserMovieRanking(
-        movieId: 27205,
-        movieTitle: "Inception",
-        posterPath: "/9gk7adHYeDvHkCSEqAvQNLV5Uge.jpg",
-        releaseDate: "2010-07-16",
-        finalScore: 9300,
-        enjoyment: 95,
-        story: 90,
-        acting: 88,
-        soundtrack: 92,
-        rewatchability: 88,
-        genreScores: ["mindBending": 95, "actionIntensity": 85, "suspense": 88]
-    )
-
-    let pulpFiction = UserMovieRanking(
-        movieId: 680,
-        movieTitle: "Pulp Fiction",
-        posterPath: "/d5iIlFn5s0ImszYzBPb8JPIfbXD.jpg",
-        releaseDate: "1994-09-10",
-        finalScore: 9400,
-        enjoyment: 94,
-        story: 95,
-        acting: 92,
-        soundtrack: 88,
-        rewatchability: 90,
-        genreScores: ["funniness": 78, "suspense": 85, "emotionalDepth": 80]
-    )
-
-    // Insert all rankings
-    container.mainContext.insert(parasite)
-    container.mainContext.insert(theShining)
-    container.mainContext.insert(grandBudapest)
-    container.mainContext.insert(madMax)
-    container.mainContext.insert(interstellar)
-    container.mainContext.insert(lalaland)
-    container.mainContext.insert(seVen)
-    container.mainContext.insert(shawshank)
-    container.mainContext.insert(inception)
-    container.mainContext.insert(pulpFiction)
+    for movie in movies {
+        let ranking = UserMovieRanking(
+            movieId: Int.random(in: 1000...9999),
+            movieTitle: movie.title,
+            posterPath: movie.poster,
+            releaseDate: movie.year,
+            finalScore: movie.score,
+            enjoyment: 90,
+            story: 88,
+            acting: 85,
+            soundtrack: 82,
+            rewatchability: 80,
+            genreScores: [movie.genreKey: movie.genreScore]
+        )
+        container.mainContext.insert(ranking)
+    }
 
     return NavigationStack {
         ProfileView()

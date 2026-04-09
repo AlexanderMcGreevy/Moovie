@@ -21,9 +21,14 @@ struct AddFriendView: View {
     @State private var showingError = false
     @State private var errorMessage = ""
     @State private var showingSuccess = false
+    @State private var isSending = false
 
     private var currentProfile: UserProfile? {
         profiles.first
+    }
+
+    private var syncManager: SyncManager {
+        SyncManager.shared
     }
 
     var body: some View {
@@ -79,16 +84,22 @@ struct AddFriendView: View {
 
                 Section {
                     Button {
-                        sendFriendRequest()
+                        Task {
+                            await sendFriendRequest()
+                        }
                     } label: {
                         HStack {
                             Spacer()
-                            Text("Send Friend Request")
+                            if isSending {
+                                ProgressView()
+                                    .padding(.trailing, 8)
+                            }
+                            Text(isSending ? "Sending..." : "Send Friend Request")
                                 .fontWeight(.semibold)
                             Spacer()
                         }
                     }
-                    .disabled(friendCode.isEmpty || friendUsername.isEmpty)
+                    .disabled(friendCode.isEmpty || friendUsername.isEmpty || isSending)
                 }
             }
             .navigationTitle("Add Friend")
@@ -122,7 +133,7 @@ struct AddFriendView: View {
 
     // MARK: - Helper Functions
 
-    private func sendFriendRequest() {
+    private func sendFriendRequest() async {
         guard let currentProfile = currentProfile else {
             errorMessage = "Please sign in first"
             showingError = true
@@ -156,36 +167,37 @@ struct AddFriendView: View {
             return
         }
 
-        // Create friend request (in local MVP, this immediately creates friendship)
-        // In production, this would send a request to the friend
-        let newFriend = Friend(
-            userId: currentProfile.id,
-            friendUserId: friendUUID,
-            friendUsername: friendUsername.isEmpty ? "Friend" : friendUsername,
-            status: .pending
-        )
-
-        modelContext.insert(newFriend)
-
-        // Also create a FriendRequest record
-        let request = FriendRequest(
-            fromUserId: currentProfile.id,
-            fromUsername: currentProfile.username,
-            toUserId: friendUUID,
-            message: message.isEmpty ? nil : message
-        )
-
-        modelContext.insert(request)
+        isSending = true
 
         do {
+            // Send friend request via Supabase
+            try await syncManager.sendFriendRequest(
+                fromUserId: currentProfile.id,
+                toUserId: friendUUID,
+                message: message.isEmpty ? nil : message
+            )
+
+            // Create local FriendRequest record for tracking
+            let request = FriendRequest(
+                fromUserId: currentProfile.id,
+                fromUsername: currentProfile.username,
+                toUserId: friendUUID,
+                message: message.isEmpty ? nil : message
+            )
+            modelContext.insert(request)
+
             try modelContext.save()
+
+            isSending = false
             showingSuccess = true
 
             // Clear fields
             friendCode = ""
             friendUsername = ""
             message = ""
+
         } catch {
+            isSending = false
             errorMessage = "Failed to send friend request: \(error.localizedDescription)"
             showingError = true
         }

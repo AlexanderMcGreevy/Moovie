@@ -15,6 +15,13 @@ struct FriendProfileView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var allSharedRankings: [SharedRanking]
 
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+
+    private var syncManager: SyncManager {
+        SyncManager.shared
+    }
+
     private var friendRankings: [SharedRanking] {
         allSharedRankings.filter { $0.friendId == friend.friendUserId }
             .sorted { $0.finalScore > $1.finalScore }
@@ -67,6 +74,75 @@ struct FriendProfileView: View {
         }
         .navigationTitle(friend.friendUsername)
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            Task {
+                await fetchFriendRankings()
+            }
+        }
+        .refreshable {
+            await fetchFriendRankings()
+        }
+        .overlay {
+            if isLoading {
+                ProgressView("Loading rankings...")
+                    .padding()
+                    .background(.regularMaterial)
+                    .cornerRadius(12)
+            }
+        }
+        .alert("Error", isPresented: .constant(errorMessage != nil)) {
+            Button("OK") {
+                errorMessage = nil
+            }
+        } message: {
+            if let error = errorMessage {
+                Text(error)
+            }
+        }
+    }
+
+    // MARK: - Data Fetching
+
+    private func fetchFriendRankings() async {
+        isLoading = true
+        errorMessage = nil
+
+        do {
+            let remoteRankings = try await syncManager.fetchFriendRankings(friendUserId: friend.friendUserId)
+
+            // Convert DTOs to SharedRanking objects
+            for rankingDTO in remoteRankings {
+                // Check if ranking already exists locally
+                let rankingExists = allSharedRankings.contains {
+                    $0.friendId == friend.friendUserId && $0.movieId == rankingDTO.movieId
+                }
+
+                if !rankingExists {
+                    let sharedRanking = SharedRanking(
+                        friendId: friend.friendUserId,
+                        movieId: rankingDTO.movieId,
+                        movieTitle: rankingDTO.movieTitle,
+                        posterPath: rankingDTO.posterPath,
+                        releaseDate: rankingDTO.releaseDate,
+                        finalScore: rankingDTO.finalScore,
+                        enjoyment: rankingDTO.enjoyment,
+                        story: rankingDTO.story,
+                        acting: rankingDTO.acting,
+                        soundtrack: rankingDTO.soundtrack,
+                        rewatchability: rankingDTO.rewatchability,
+                        genreScores: rankingDTO.genreScores ?? [:]
+                    )
+                    modelContext.insert(sharedRanking)
+                }
+            }
+
+            try modelContext.save()
+            isLoading = false
+
+        } catch {
+            errorMessage = "Failed to load friend's rankings: \(error.localizedDescription)"
+            isLoading = false
+        }
     }
 
     // MARK: - Profile Header
