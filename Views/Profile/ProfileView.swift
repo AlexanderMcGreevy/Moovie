@@ -187,18 +187,12 @@ struct ProfileView: View {
 
             // Top Movies by Genre
             if !rankings.isEmpty {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 12) {
                     Text("Top Movies by Genre")
                         .font(.headline)
                         .padding(.horizontal)
 
-                    GenreSection(title: "Horror 💀", rankings: rankings, genreKey: "scariness")
-                    GenreSection(title: "Comedy 🤣", rankings: rankings, genreKey: "funniness")
-                    GenreSection(title: "Action 💥", rankings: rankings, genreKey: "actionIntensity")
-                    GenreSection(title: "Sci-Fi 🌌", rankings: rankings, genreKey: "mindBending")
-                    GenreSection(title: "Drama 💔", rankings: rankings, genreKey: "emotionalDepth")
-                    GenreSection(title: "Romance 💖", rankings: rankings, genreKey: "romanceLevel")
-                    GenreSection(title: "Thriller 😱", rankings: rankings, genreKey: "suspense")
+                    InfiniteGenreScroll(rankings: rankings)
                 }
             }
 
@@ -336,6 +330,85 @@ struct ProfileView: View {
 
 // MARK: - Components
 
+struct InfiniteGenreScroll: View {
+    let rankings: [UserMovieRanking]
+
+    @State private var currentIndex: Int = 1 // Start at middle set
+
+    private let genres: [(title: String, key: String)] = [
+        ("Horror 💀", "scariness"),
+        ("Comedy 🤣", "funniness"),
+        ("Action 💥", "actionIntensity"),
+        ("Sci-Fi 🌌", "mindBending"),
+        ("Drama 💔", "emotionalDepth"),
+        ("Romance 💖", "romanceLevel"),
+        ("Thriller 😱", "suspense")
+    ]
+
+    var body: some View {
+        GeometryReader { geometry in
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 32) {
+                        // Render 3 sets for infinite loop
+                        ForEach(0..<3) { setIndex in
+                            ForEach(genres.indices, id: \.self) { genreIndex in
+                                GenreColumn(
+                                    title: genres[genreIndex].title,
+                                    rankings: rankings,
+                                    genreKey: genres[genreIndex].key
+                                )
+                                .id("\(setIndex)-\(genreIndex)")
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+                    .background(
+                        GeometryReader { contentGeometry in
+                            Color.clear.preference(
+                                key: ScrollOffsetPreferenceKey.self,
+                                value: contentGeometry.frame(in: .named("scroll")).minX
+                            )
+                        }
+                    )
+                }
+                .coordinateSpace(name: "scroll")
+                .onPreferenceChange(ScrollOffsetPreferenceKey.self) { offset in
+                    handleScrollOffset(offset, proxy: proxy, viewWidth: geometry.size.width)
+                }
+                .onAppear {
+                    // Scroll to middle set on appear
+                    proxy.scrollTo("1-0", anchor: .leading)
+                }
+            }
+        }
+        .frame(height: 680) // Approximate height for 5 posters + spacing
+    }
+
+    private func handleScrollOffset(_ offset: CGFloat, proxy: ScrollViewProxy, viewWidth: CGFloat) {
+        let genreWidth: CGFloat = 120 + 32 // poster width + spacing
+        let setWidth = genreWidth * CGFloat(genres.count)
+
+        // Check if scrolled too far left (into first set)
+        if offset > -setWidth * 0.5 {
+            // Jump to equivalent position in middle set
+            proxy.scrollTo("1-0", anchor: .leading)
+        }
+        // Check if scrolled too far right (into third set)
+        else if offset < -(setWidth * 2.5) {
+            // Jump to equivalent position in middle set
+            proxy.scrollTo("1-0", anchor: .leading)
+        }
+    }
+}
+
+struct ScrollOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 struct StatCard: View {
     let title: String
     let value: String
@@ -395,30 +468,34 @@ struct FavoriteMovieRow: View {
     }
 }
 
-struct GenreSection: View {
+struct GenreColumn: View {
     let title: String
     let rankings: [UserMovieRanking]
     let genreKey: String
 
-    private var topMovie: UserMovieRanking? {
+    private var topMovies: [UserMovieRanking] {
         rankings
             .filter { $0.genreScores[genreKey] != nil }
-            .max { ($0.genreScores[genreKey] ?? 0) < ($1.genreScores[genreKey] ?? 0) }
+            .sorted { ($0.genreScores[genreKey] ?? 0) > ($1.genreScores[genreKey] ?? 0) }
+            .prefix(5) // Show top 5 movies for this genre
+            .map { $0 }
     }
 
     var body: some View {
-        if let movie = topMovie {
-            VStack(alignment: .leading, spacing: 8) {
+        if !topMovies.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
                 Text(title)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal)
+                    .font(.headline)
+                    .fontWeight(.semibold)
 
-                NavigationLink(destination: DetailedMovieView(movie: createMovieInfo(from: movie))) {
-                    GenreMovieRow(ranking: movie, genreKey: genreKey)
+                VStack(spacing: 12) {
+                    ForEach(topMovies, id: \.id) { movie in
+                        NavigationLink(destination: DetailedMovieView(movie: createMovieInfo(from: movie))) {
+                            GenreMoviePoster(ranking: movie)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
                 }
-                .buttonStyle(PlainButtonStyle())
             }
         }
     }
@@ -434,51 +511,24 @@ struct GenreSection: View {
     }
 }
 
-struct GenreMovieRow: View {
+struct GenreMoviePoster: View {
     let ranking: UserMovieRanking
-    let genreKey: String
 
     var body: some View {
-        HStack(spacing: 12) {
-            AsyncImage(url: URL(string: "https://image.tmdb.org/t/p/w92\(ranking.posterPath ?? "")")) { image in
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } placeholder: {
-                Rectangle()
-                    .fill(Color.gray.opacity(0.3))
-            }
-            .frame(width: 40, height: 60)
-            .cornerRadius(6)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(ranking.movieTitle)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .lineLimit(1)
-
-                Text(ranking.releaseDate)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            Spacer()
-
-            if let score = ranking.genreScores[genreKey] {
-                Text("\(score)")
-                    .font(.headline)
-                    .foregroundColor(.blue)
-            }
-
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundColor(.gray)
+        AsyncImage(url: URL(string: "https://image.tmdb.org/t/p/w185\(ranking.posterPath ?? "")")) { image in
+            image
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } placeholder: {
+            Rectangle()
+                .fill(Color.gray.opacity(0.3))
+                .overlay(
+                    ProgressView()
+                )
         }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(Color.gray.opacity(0.05))
-        .cornerRadius(8)
-        .padding(.horizontal)
+        .frame(width: 120, height: 180)
+        .cornerRadius(12)
+        .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
     }
 }
 

@@ -18,9 +18,14 @@ struct FriendsView: View {
     @State private var showingRequests = false
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var showingSignInAlert = false
 
     private var currentProfile: UserProfile? {
         profiles.first
+    }
+
+    private var isSignedIn: Bool {
+        currentProfile?.appleUserID != nil
     }
 
     private var syncManager: SyncManager {
@@ -49,7 +54,11 @@ struct FriendsView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
-                    showingAddFriend = true
+                    if isSignedIn {
+                        showingAddFriend = true
+                    } else {
+                        showingSignInAlert = true
+                    }
                 } label: {
                     Image(systemName: "person.badge.plus")
                 }
@@ -57,6 +66,11 @@ struct FriendsView: View {
         }
         .sheet(isPresented: $showingAddFriend) {
             AddFriendView()
+        }
+        .alert("Sign In Required", isPresented: $showingSignInAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Please sign in with Apple in the Profile tab to add friends and sync your rankings.")
         }
         .sheet(isPresented: $showingRequests) {
             FriendRequestsView()
@@ -94,30 +108,32 @@ struct FriendsView: View {
         VStack(spacing: 24) {
             Spacer()
 
-            Image(systemName: "person.2.circle")
+            Image(systemName: isSignedIn ? "person.2.circle" : "person.crop.circle.badge.exclamationmark")
                 .font(.system(size: 80))
                 .foregroundColor(.secondary)
 
-            Text("No Friends Yet")
+            Text(isSignedIn ? "No Friends Yet" : "Sign In Required")
                 .font(.title2)
                 .fontWeight(.semibold)
 
-            Text("Add friends to share rankings and compare movies!")
+            Text(isSignedIn ? "Add friends to share rankings and compare movies!" : "Please sign in with Apple in the Profile tab to add friends and sync your rankings.")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
 
-            Button {
-                showingAddFriend = true
-            } label: {
-                Label("Add Friend", systemImage: "person.badge.plus")
-                    .font(.headline)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 12)
-                    .background(Color.blue)
-                    .cornerRadius(10)
+            if isSignedIn {
+                Button {
+                    showingAddFriend = true
+                } label: {
+                    Label("Add Friend", systemImage: "person.badge.plus")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 12)
+                        .background(Color.blue)
+                        .cornerRadius(10)
+                }
             }
 
             Spacer()
